@@ -1,0 +1,21 @@
+# Legacy firmware (reference only, not tracked)
+Aula/
+Max/
+
+# Build output
+build/
+build_*/
+*.o
+*.obj
+*.elf
+*.hex
+*.bin
+*.map
+
+# KiCad auto-save history (contains its own nested git repo)
+PCB/kicad_project/.history/
+
+# Editor / tooling
+.vscode/
+AGENTS.md
+CLAUDE.md
