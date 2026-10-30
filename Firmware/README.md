@@ -70,26 +70,47 @@ the output. Logs are on RTT channel 0.
 
 Skin contact is detected from the raw IR level (`APP_CONTACT_IR_MIN` in
 `include/app_config.h`). The first reading comes about 11 s after contact
-(1 s contact debounce, 8 s window, 2 s filter settling), then one line every
-second, plus a diagnostics line every 5 s:
+(1 s contact debounce, 8 s window, 2 s filter settling). The monitor shows one
+line per second while the sensor is on the skin:
 
 ```text
-[00:00:01.000,000] <inf> main: HR: --  (no skin contact)
-[00:00:01.400,000] <inf> main: Skin contact detected, first reading in ~10 s
-[00:00:12.000,000] <inf> main: HR: 74 bpm  (ir, quality 83)
-[00:00:12.000,000] <inf> main: HR: 74 bpm (held)  (ir, quality 42)
-[00:00:15.000,000] <inf> main: PPG 105.4 Hz | red dc 80211 ac 9 q 61 | ir dc 90532 ac 14 q 83 | green dc 6001 ac 1 q 15
-[00:00:19.000,000] <inf> main: HR: --  (best red, quality 12)
+Smart Hydration Band - heart rate
+Place the sensor on the wrist and keep still.
+
+  time    heart rate   status
+  -----   ----------   ----------------------------
+  00:01   --           no skin contact
+  00:04   --           measuring, ready in 11 s
+  00:05   --           measuring, ready in 10 s
+  ...
+  00:15    83 bpm      signal good (85)
+  00:16    84 bpm      signal good (88)
+  00:30    84 bpm      signal fair (72)
+  00:41    84 bpm      signal lost, holding last value
+  00:47   --           no clear pulse, keep still
+  00:52   --           no skin contact
 ```
 
-- `quality` is the autocorrelation peak x 100: how periodic the last 8 s were.
-  The first reading needs 65 (a marginal first lock can be on half the rate);
-  after that, below 50 no new reading is made; the last value is shown as `(held)` for up
-  to 5 s, then `--`. The channel in brackets is the one used.
-- `PPG ... Hz` is the measured sensor sample rate (0.0 for the first 10 s).
+- `signal` is the periodicity of the last 8 s (0-100): good is 80 and above,
+  fair 65-79, weak 50-64. The first reading needs 65 (a marginal first lock
+  can be on half the rate); after that, below 50 the last value is held for up
+  to 5 s, then the line shows `no clear pulse`.
+- Off the skin the status is printed once, then every 10 s.
+- Warnings and errors (FIFO overflow, I2C failures) still appear as normal
+  Zephyr log lines.
+
+For tuning, set `APP_PPG_DIAGNOSTICS` to `1` in `include/app_config.h` to add a
+line every 5 s:
+
+```text
+  diag    105.4 Hz | red dc 84197 ac 10 q 29 | ir dc 172660 ac 57 q 89 | green dc 4803 ac 37 q 14
+```
+
+- The rate is the measured sensor sample rate (0.0 for the first 10 s).
 - `dc` is the raw level, `ac` the RMS pulse size after the band-pass, both in
-  ADC counts. Off the skin IR `dc` is a few thousand; above ~240000 the
-  LED current is too high (18-bit limit 262143). A larger `ac` at the same
+  ADC counts, and `q` the channel's periodicity. The estimate uses the channel
+  with the highest `q`. Off the skin IR `dc` is a few thousand; above ~240000
+  the LED current is too high (18-bit limit 262143). A larger `ac` at the same
   `dc` means a stronger pulse.
 
 ## Heart-rate algorithm
@@ -136,6 +157,8 @@ handled yet; that needs the BMI270.
   overlay's `acq-mode`, `led-slot`, `smp-sr`, `smp-ave` or `led-pw` change,
   because the heart-rate timing depends on them; update `MAX30101_SAMPLE_RATE_HZ` and `HR_SAMPLE_RATE_HZ`
   together if you change it.
+- `APP_PPG_DIAGNOSTICS` set to `1` adds the per-channel diagnostics line
+  described above.
 - `APP_RAW_STREAM` set to `1` prints `sample_index,red,ir,green` over RTT for
   signal inspection (sample index x 10 ms = sensor time). Use it to check
   LED-current headroom and waveform amplitude.

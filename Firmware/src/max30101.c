@@ -43,7 +43,7 @@ int max30101_init(void)
 		return -ENODEV;
 	}
 
-	LOG_INF("MAX30101 ready");
+	LOG_DBG("MAX30101 ready");
 	return 0;
 }
 

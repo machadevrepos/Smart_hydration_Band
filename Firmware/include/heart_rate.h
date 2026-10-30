@@ -33,6 +33,9 @@ struct hr_channel_stats {
 	int quality;
 };
 
+/* Seconds of samples before the first estimate (window plus filter settling). */
+#define HR_FIRST_ESTIMATE_S 11
+
 /* Reset the estimator. Call after any gap in the sample stream. */
 void heart_rate_init(void);
 
@@ -46,8 +49,8 @@ void heart_rate_set_sample_rate(float hz);
 /*
  * Feed one raw PPG sample per channel, indexed by enum hr_channel.
  *
- * Returns true once per second, after the first 10 s, with a new estimate in
- * *out.
+ * Returns true once per second, starting HR_FIRST_ESTIMATE_S seconds after
+ * heart_rate_init(), with a new estimate in *out.
  */
 bool heart_rate_process(const int32_t samples[HR_NUM_CHANNELS], struct hr_estimate *out);
 

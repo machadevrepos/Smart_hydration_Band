@@ -39,6 +39,9 @@
 #define WINDOW_LEN (WINDOW_S * FS_DEC)
 #define SETTLE_LEN (2 * FS_DEC)
 
+_Static_assert((WINDOW_LEN + SETTLE_LEN + FS_DEC) / FS_DEC == HR_FIRST_ESTIMATE_S,
+	       "HR_FIRST_ESTIMATE_S must match the window and settling time");
+
 #define MIN_BPM 40
 #define MAX_BPM 200
 #define LAG_MIN (FS_DEC * 60 / MAX_BPM)

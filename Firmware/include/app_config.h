@@ -17,6 +17,13 @@
  */
 #define APP_CONTACT_IR_MIN 50000
 
+/*
+ * Set to 1 to add a line every 5 s with the measured sample rate and, per
+ * channel, the raw level, pulse size and periodicity. Use it when tuning LED
+ * currents or debugging contact.
+ */
+#define APP_PPG_DIAGNOSTICS 0
+
 /* Set to 1 to stream raw PPG samples as CSV: sample_index,red,ir,green. */
 #define APP_RAW_STREAM 0
 

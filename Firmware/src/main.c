@@ -21,8 +21,15 @@ BUILD_ASSERT(HR_SAMPLE_RATE_HZ == MAX30101_SAMPLE_RATE_HZ,
 #define RATE_MIN_HZ 80.0f
 #define RATE_MAX_HZ 120.0f
 
-/* How often the per-channel diagnostics line is printed. */
+/* Heart-rate status is printed once a second; diagnostics every 5 s. */
+#define STATUS_PERIOD_MS 1000
 #define DIAG_PERIOD_MS 5000
+/* While off the skin, repeat the status only this often. */
+#define NO_CONTACT_REPEAT_MS 10000
+
+/* Quality thresholds for the status wording (the estimator rejects below 50). */
+#define QUALITY_GOOD 80
+#define QUALITY_FAIR 65
 
 /*
  * Skin contact from the raw IR level: ~160000-195000 on wrist and finger at
@@ -33,7 +40,6 @@ BUILD_ASSERT(HR_SAMPLE_RATE_HZ == MAX30101_SAMPLE_RATE_HZ,
  */
 #define CONTACT_ON_SAMPLES 100
 #define CONTACT_OFF_SAMPLES 10
-#define NO_CONTACT_PERIOD_MS 1000
 
 struct contact {
 	bool on;
@@ -59,7 +65,76 @@ static bool contact_update(struct contact *c, int32_t ir)
 	return true;
 }
 
-static const char *const channel_names[HR_NUM_CHANNELS] = {"red", "ir", "green"};
+/* What the status line shows, refreshed from the estimator once a second. */
+struct hr_status {
+	int64_t contact_since_ms;
+	bool have_estimate;
+	struct hr_estimate hr;
+	int64_t last_no_contact_ms;
+};
+
+static const char *quality_word(int quality)
+{
+	if (quality >= QUALITY_GOOD) {
+		return "good";
+	}
+	if (quality >= QUALITY_FAIR) {
+		return "fair";
+	}
+	return "weak";
+}
+
+static void print_header(void)
+{
+	printk("\n"
+	       "Smart Hydration Band - heart rate\n"
+	       "Place the sensor on the wrist and keep still.\n"
+	       "\n"
+	       "  time    heart rate   status\n"
+	       "  -----   ----------   ----------------------------\n");
+}
+
+/* One line: "  mm:ss   <rate>   <status>". */
+static void print_status(const struct contact *contact, struct hr_status *st)
+{
+	int64_t now = k_uptime_get();
+	unsigned int secs = (unsigned int)(now / 1000);
+	unsigned int min = secs / 60;
+	unsigned int sec = secs % 60;
+
+	if (!contact->on) {
+		/* Report once on removal, then only every NO_CONTACT_REPEAT_MS. */
+		if (st->last_no_contact_ms != 0 &&
+		    now - st->last_no_contact_ms < NO_CONTACT_REPEAT_MS) {
+			return;
+		}
+		st->last_no_contact_ms = now;
+		printk("  %02u:%02u   --           no skin contact\n", min, sec);
+		return;
+	}
+	st->last_no_contact_ms = 0;
+
+	if (!st->have_estimate) {
+		int waited = (int)((now - st->contact_since_ms) / 1000);
+		int left = HR_FIRST_ESTIMATE_S - waited;
+
+		printk("  %02u:%02u   --           measuring, ready in %d s\n", min, sec,
+		       left > 1 ? left : 1);
+		return;
+	}
+
+	const struct hr_estimate *hr = &st->hr;
+
+	if (hr->bpm == 0) {
+		printk("  %02u:%02u   --           no clear pulse, keep still\n", min, sec);
+	} else if (hr->held) {
+		printk("  %02u:%02u   %3d bpm      signal lost, holding last value\n", min, sec,
+		       hr->bpm);
+	} else {
+		printk("  %02u:%02u   %3d bpm      signal %s (%d)\n", min, sec, hr->bpm,
+		       quality_word(hr->quality), hr->quality);
+	}
+}
 
 struct rate_meter {
 	int64_t start_ms;
@@ -95,6 +170,7 @@ static void rate_meter_update(struct rate_meter *m, int count)
 	rate_meter_restart(m);
 }
 
+#if APP_PPG_DIAGNOSTICS
 static void print_diagnostics(const struct rate_meter *m)
 {
 	struct hr_channel_stats st[HR_NUM_CHANNELS];
@@ -104,21 +180,26 @@ static void print_diagnostics(const struct rate_meter *m)
 	}
 
 	/* dc = raw level, ac = pulse size (band-passed RMS), q = periodicity. */
-	LOG_INF("PPG %d.%d Hz | red dc %d ac %d q %d | ir dc %d ac %d q %d | "
-		"green dc %d ac %d q %d",
-		(int)m->hz, (int)(m->hz * 10.0f) % 10,
-		st[0].dc, st[0].ac, st[0].quality, st[1].dc, st[1].ac, st[1].quality,
-		st[2].dc, st[2].ac, st[2].quality);
+	printk("  diag    %d.%d Hz | red dc %d ac %d q %d | ir dc %d ac %d q %d | "
+	       "green dc %d ac %d q %d\n",
+	       (int)m->hz, (int)(m->hz * 10.0f) % 10,
+	       st[HR_CHANNEL_RED].dc, st[HR_CHANNEL_RED].ac, st[HR_CHANNEL_RED].quality,
+	       st[HR_CHANNEL_IR].dc, st[HR_CHANNEL_IR].ac, st[HR_CHANNEL_IR].quality,
+	       st[HR_CHANNEL_GREEN].dc, st[HR_CHANNEL_GREEN].ac, st[HR_CHANNEL_GREEN].quality);
 }
+#endif
 
 int main(void)
 {
 	static struct max30101_sample samples[MAX30101_FIFO_DEPTH];
 	struct rate_meter rate = {.hz = 0.0f};
 	struct contact contact = {.on = false};
+	struct hr_status status = {0};
 	uint32_t sample_index = 0;
+	int64_t next_status_ms = STATUS_PERIOD_MS;
+#if APP_PPG_DIAGNOSTICS
 	int64_t next_diag_ms = DIAG_PERIOD_MS;
-	int64_t next_no_contact_ms = 0;
+#endif
 	int ret;
 
 	ret = max30101_init();
@@ -128,7 +209,7 @@ int main(void)
 	}
 
 	heart_rate_init();
-	LOG_INF("Place the sensor against the skin to start heart-rate measurement");
+	print_header();
 	rate_meter_restart(&rate);
 
 	for (;;) {
@@ -138,6 +219,8 @@ int main(void)
 		if (count < 0) {
 			LOG_WRN("MAX30101 read failed (%d)", count);
 			heart_rate_init();
+			status.have_estimate = false;
+			status.contact_since_ms = k_uptime_get();
 			rate_meter_restart(&rate);
 			k_sleep(K_MSEC(APP_POLL_INTERVAL_MS));
 			continue;
@@ -147,6 +230,8 @@ int main(void)
 		if (lost) {
 			LOG_WRN("MAX30101 FIFO overflow, samples lost");
 			heart_rate_init();
+			status.have_estimate = false;
+			status.contact_since_ms = k_uptime_get();
 			rate_meter_restart(&rate);
 		} else {
 			rate_meter_update(&rate, count);
@@ -168,37 +253,29 @@ int main(void)
 
 			if (contact_update(&contact, samples[i].ir)) {
 				heart_rate_init();
-				if (contact.on) {
-					LOG_INF("Skin contact detected, first reading in ~10 s");
-				} else {
-					LOG_INF("Skin contact lost");
-				}
+				status.have_estimate = false;
+				status.contact_since_ms = k_uptime_get();
 			}
 
-			/* Keep feeding so the diagnostics stay live; discard results. */
-			if (!heart_rate_process(channels, &hr) || !contact.on) {
-				continue;
-			}
-
-			if (hr.bpm == 0) {
-				LOG_INF("HR: --  (best %s, quality %d)", channel_names[hr.channel],
-					hr.quality);
-			} else {
-				LOG_INF("HR: %d bpm%s  (%s, quality %d)", hr.bpm,
-					hr.held ? " (held)" : "", channel_names[hr.channel],
-					hr.quality);
+			/* Keep feeding so the diagnostics stay live; ignore results off skin. */
+			if (heart_rate_process(channels, &hr) && contact.on) {
+				status.hr = hr;
+				status.have_estimate = true;
 			}
 		}
 
-		if (!contact.on && k_uptime_get() >= next_no_contact_ms) {
-			next_no_contact_ms = k_uptime_get() + NO_CONTACT_PERIOD_MS;
-			LOG_INF("HR: --  (no skin contact)");
+		/* Fixed 1 s cadence, independent of FIFO bursts and the sensor clock. */
+		if (k_uptime_get() >= next_status_ms) {
+			next_status_ms += STATUS_PERIOD_MS;
+			print_status(&contact, &status);
 		}
 
+#if APP_PPG_DIAGNOSTICS
 		if (k_uptime_get() >= next_diag_ms) {
 			next_diag_ms += DIAG_PERIOD_MS;
 			print_diagnostics(&rate);
 		}
+#endif
 
 		k_sleep(K_MSEC(APP_POLL_INTERVAL_MS));
 	}
