@@ -19,3 +19,6 @@ PCB/kicad_project/.history/
 .vscode/
 AGENTS.md
 CLAUDE.md
+
+# KiCad lock files (present while a board is open)
+~*.lck
