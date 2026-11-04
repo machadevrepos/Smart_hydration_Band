@@ -54,8 +54,3 @@ bool button_pressed(void)
 
 	return pressed;
 }
-
-bool button_is_down(void)
-{
-	return stable_down;
-}

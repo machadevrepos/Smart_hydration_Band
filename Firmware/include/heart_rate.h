@@ -4,35 +4,15 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* Channels fed to heart_rate_process(), in this order. */
-enum hr_channel {
-	HR_CHANNEL_RED,
-	HR_CHANNEL_IR,
-	HR_CHANNEL_GREEN,
-	HR_NUM_CHANNELS,
-};
-
 struct hr_estimate {
 	/* Heart rate in bpm, or 0 when there is no reliable reading. */
 	int bpm;
-	/* Periodicity of the last 8 s on the chosen channel, 0-100. Below 50 is rejected. */
+	/* Periodicity of the last 8 s, 0-100. Below 50 is rejected. */
 	int quality;
 	/* True when bpm is the last good value, held through a short bad stretch. */
 	bool held;
 	/* True when the signal is still decaying after placement; no new reading. */
 	bool settling;
-	/* Channel with the clearest rhythm, used for this estimate. */
-	enum hr_channel channel;
-};
-
-/* Per-channel signal levels for diagnostics and LED-current tuning. */
-struct hr_channel_stats {
-	/* Raw level (ADC counts, averaged over ~1 s). */
-	int32_t dc;
-	/* RMS of the 0.9-3 Hz band-passed signal (ADC counts): the pulse size. */
-	int32_t ac;
-	/* Periodicity of the last 8 s, 0-100. */
-	int quality;
 };
 
 /* Seconds of samples before the first estimate (window plus filter settling). */
@@ -49,14 +29,11 @@ void heart_rate_init(void);
 void heart_rate_set_sample_rate(float hz);
 
 /*
- * Feed one raw PPG sample per channel, indexed by enum hr_channel.
+ * Feed one raw IR sample.
  *
  * Returns true once per second, starting HR_FIRST_ESTIMATE_S seconds after
  * heart_rate_init(), with a new estimate in *out.
  */
-bool heart_rate_process(const int32_t samples[HR_NUM_CHANNELS], struct hr_estimate *out);
-
-/* Latest diagnostics for one channel; quality is updated once per second. */
-void heart_rate_get_stats(enum hr_channel channel, struct hr_channel_stats *stats);
+bool heart_rate_process(int32_t sample, struct hr_estimate *out);
 
 #endif /* HEART_RATE_H */

@@ -1,6 +1,15 @@
 #ifndef APP_CONFIG_H
 #define APP_CONFIG_H
 
+/* Water reminder intervals in seconds: Daily 90 min, Night 35 min. */
+#define APP_DAILY_REMINDER_S 5400
+#define APP_NIGHT_REMINDER_S 2100
+
+/* Reminder: two pulses with a gap. Button press: one buzz. All in ms. */
+#define APP_HAPTIC_TAP_MS     200
+#define APP_HAPTIC_TAP_GAP_MS 200
+#define APP_HAPTIC_BUZZ_MS    300
+
 /*
  * How often main.c drains the MAX30101 FIFO. The FIFO holds 32 samples
  * (320 ms at 100 Hz), so this must stay well below that or samples are lost.
@@ -18,17 +27,7 @@
  */
 #define APP_CONTACT_IR_MIN 50000
 
-/*
- * Set to 1 to add a line every 5 s with the measured sample rate and, per
- * channel, the raw level, pulse size and periodicity. Use it when tuning LED
- * currents or debugging contact.
- */
-#define APP_PPG_DIAGNOSTICS 0
-
 /* Status LED level per color, 0-255. Current and brightness rise with it. */
 #define APP_LED_LEVEL 40
-
-/* Set to 1 to stream raw PPG samples as CSV: sample_index,red,ir,green. */
-#define APP_RAW_STREAM 0
 
 #endif /* APP_CONFIG_H */

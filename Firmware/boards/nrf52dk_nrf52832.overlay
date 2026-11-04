@@ -34,14 +34,14 @@
 		compatible = "maxim,max30101";
 		reg = <0x57>;
 		status = "okay";
-		/* Slot 1 = red, slot 2 = IR, slot 3 = green. */
-		acq-mode = "multi-led";
-		led-slot = <1 2 3 0>;
 		/*
-		 * [red IR green], 0.2 mA/LSB: ~19 mA, ~38 mA, ~19 mA. IR carries the
-		 * wrist pulse on this board, so it gets the extra light.
+		 * IR only: it carries the wrist pulse on this board. Green cannot work
+		 * from the 3.3 V LED supply, and SpO2 will need red added back.
 		 */
-		led-pa = [60 C0 60];
+		acq-mode = "multi-led";
+		led-slot = <2 0 0 0>;
+		/* [red IR green], 0.2 mA/LSB: IR ~38 mA. */
+		led-pa = [00 C0 00];
 		/* 100 Hz, no on-chip averaging. */
 		smp-sr = <100>;
 		smp-ave = <1>;
@@ -56,6 +56,22 @@
 		compatible = "bosch,bmi270";
 		reg = <0x68>;
 		status = "okay";
+	};
+};
+
+/*
+ * Haptic motor: P0.24 drives the gate of low-side switch Q1 through R12. R13
+ * holds the gate low until the pin is configured. "gpio-leds" is only a plain
+ * output description here; no LED driver is enabled.
+ */
+/ {
+	haptic {
+		compatible = "gpio-leds";
+
+		haptic_motor: haptic_motor {
+			gpios = <&gpio0 24 GPIO_ACTIVE_HIGH>;
+			label = "Haptic motor";
+		};
 	};
 };
 
@@ -114,5 +130,10 @@
  * Disable it so it cannot claim them.
  */
 &spi1 {
+	status = "disabled";
+};
+
+/* Not wired up on this PCB, and output goes over RTT. */
+&uart0 {
 	status = "disabled";
 };

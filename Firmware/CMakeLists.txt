@@ -16,4 +16,6 @@ target_sources(app PRIVATE
   src/step_counter.c
   src/status_led.c
   src/button.c
+  src/haptic.c
+  src/band_mode.c
 )

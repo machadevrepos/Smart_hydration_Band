@@ -16,16 +16,15 @@ steps with the BMI270.
 | BMI270 | I2C address `0x68`, built-in step counter polled once a second |
 | BMI270 CSB | P0.23, driven high (no pull-up on the PCB) |
 | BMI270 INT1, INT2 | P0.30, P0.31 (not used yet) |
-| Haptic motor | P0.24 (not used yet) |
+| Haptic motor | P0.24, gate of low-side switch Q1 (on = high) |
 | Status LED | WS2812 D4, data on P0.25 |
 | Push button | SW2, P0.14 to GND (internal pull-up) |
 
 The board target is `nrf52dk/nrf52832` with `boards/nrf52dk_nrf52832.overlay`.
 The MAX30101 driver in nRF Connect SDK v3.3.1 (Zephyr 4.3) takes its sensor
-settings from devicetree, so they are in the overlay: multi-LED mode with
-red/IR/green in slots 1-3, 100 Hz, no averaging, 411 us pulse width (18-bit;
-the driver default is 69 us / 15-bit), LED current `[60 C0 60]` with a 62.5
-pA/LSB ADC range. The
+settings from devicetree, so they are in the overlay: IR only (multi-LED mode,
+slot 1), 100 Hz, no averaging, 411 us pulse width (18-bit; the driver default is
+69 us / 15-bit), IR LED current `0xC0` with a 62.5 pA/LSB ADC range. The
 older Kconfig-based driver copied in `Docs/MAX30101` does not match this SDK.
 A dedicated BMD-350 board definition can replace this later; the overlay keeps
 the pin mapping explicit for now.
@@ -39,11 +38,13 @@ low-frequency clock.
 Firmware/
 ├── boards/nrf52dk_nrf52832.overlay   PCB pin map and MAX30101 node
 ├── include/
-│   ├── app_config.h                  sample rate, raw stream, detector tuning
+│   ├── app_config.h                  reminder intervals, motor timing, tuning
 │   ├── heart_rate.h                  PPG heart-rate estimator API
 │   ├── step_counter.h                BMI270 step counter API
 │   ├── status_led.h                  status LED API
 │   ├── button.h                      push button API
+│   ├── haptic.h                      motor pattern API
+│   ├── band_mode.h                   Daily and Night modes, reminders
 │   └── max30101.h                    sensor wrapper API
 ├── src/
 │   ├── main.c                        initialization and FIFO polling loop
@@ -51,7 +52,9 @@ Firmware/
 │   ├── heart_rate.c                  band-pass + windowed autocorrelation HR
 │   ├── step_counter.c                BMI270 firmware load and step counter
 │   ├── status_led.c                  WS2812 colors
-│   └── button.c                      button polling and debounce
+│   ├── button.c                      button polling and debounce
+│   ├── haptic.c                      motor patterns in the background
+│   └── band_mode.c                   mode, LED color and reminder timing
 └── prj.conf
 ```
 
@@ -86,8 +89,7 @@ Skin contact is detected from the raw IR level (`APP_CONTACT_IR_MIN` in
 line per second while the sensor is on the skin:
 
 ```text
-Smart Hydration Band - heart rate and steps
-For heart rate, place the sensor on the wrist and keep still.
+Smart Hydration Band
 
   time    heart rate    steps   status
   -----   ----------   ------   ----------------------------
@@ -110,20 +112,6 @@ For heart rate, place the sensor on the wrist and keep still.
 - Warnings and errors (FIFO overflow, I2C failures) still appear as normal
   Zephyr log lines.
 
-For tuning, set `APP_PPG_DIAGNOSTICS` to `1` in `include/app_config.h` to add a
-line every 5 s:
-
-```text
-  diag    105.4 Hz | red dc 84197 ac 10 q 29 | ir dc 172660 ac 57 q 89 | green dc 4803 ac 37 q 14
-```
-
-- The rate is the measured sensor sample rate (0.0 for the first 10 s).
-- `dc` is the raw level, `ac` the RMS pulse size after the band-pass, both in
-  ADC counts, and `q` the channel's periodicity. The estimate uses the channel
-  with the highest `q`. Off the skin IR `dc` is a few thousand; above ~240000
-  the LED current is too high (18-bit limit 262143). A larger `ac` at the same
-  `dc` means a stronger pulse.
-
 ## Step counter
 
 `src/step_counter.c` uses the step counter built into the BMI270: it loads
@@ -138,11 +126,22 @@ The count starts at 0 at power-up. Daily reset, wrist-specific tuning and use of
 the interrupt lines are not implemented, and accuracy on the wrist is not yet
 measured.
 
-## Status LED and button
+## Modes, LED, button and haptics
 
-Bring-up behavior: the LED is white at power-up and each button press swaps it
-between white and green. Client modes (white for Daily, green for Night, and a
-buzz on each press) are not implemented yet.
+The band works with no app or pairing:
+
+| Mode | LED | Reminder |
+| --- | --- | --- |
+| Daily, at power-up | White | Double tap every 90 min |
+| Night | Green | Double tap every 35 min |
+
+A button press switches mode, gives one buzz and restarts the interval. Each
+press and reminder prints a line over RTT. Intervals are the two values at the top of
+`include/app_config.h`, in seconds, with the motor timings just below them.
+
+Motor patterns run on the system work queue because the main loop must keep
+draining the sensor FIFO. Not implemented yet: app control of mode and interval,
+quiet hours (needs the time of day), and skipping reminders off the wrist.
 
 The WS2812 uses Zephyr's `worldsemi,ws2812-spi` driver on SPIM2: MOSI on P0.25,
 SCK on P0.22 (unconnected, but the SPIM stalls without a clock pin). `APP_LED_LEVEL` in `include/app_config.h` sets the brightness.
@@ -161,11 +160,10 @@ hub's documentation says its default wrist algorithm uses the green LED and
 needs an accelerometer for motion. This firmware follows the same approach
 without the motion part:
 
-- **Best of three channels.** Each second the estimator runs on red, IR and
-  green and uses the channel with the clearest rhythm. Green is normally best
-  on the wrist, but the MAX30101 green LED needs a 4.5-5.5 V LED supply and this
-  board gives it 3.3 V (see Hardware caveat). With green unusable the estimator
-  falls back to IR or red.
+- **IR only.** Green is normally best on the wrist, but the MAX30101 green LED
+  needs a 4.5-5.5 V LED supply and this board gives it 3.3 V (see Hardware
+  caveats). A wrist recording showed a clear IR pulse and no usable green, and
+  red is unused until SpO2 is added, so both are off to save power.
 - **Band-pass 0.9-3 Hz**, decimate to 50 Hz. Chosen from a raw wrist recording
   (`Docs/Raw_logs.md`): the pulse is nearly a sine at 1.4 Hz with slow lines at
   0.2-0.7 Hz. Lower corners locked on half the rate; first-differencing, used
@@ -205,16 +203,8 @@ handled yet; that needs the BMI270.
   overlay's `acq-mode`, `led-slot`, `smp-sr`, `smp-ave` or `led-pw` change,
   because the heart-rate timing depends on them; update `MAX30101_SAMPLE_RATE_HZ` and `HR_SAMPLE_RATE_HZ`
   together if you change it.
-- `APP_PPG_DIAGNOSTICS` set to `1` adds the per-channel diagnostics line
-  described above.
-- `APP_RAW_STREAM` set to `1` prints `sample_index,red,ir,green` over RTT for
-  signal inspection (sample index x 10 ms = sensor time). Use it to check
-  LED-current headroom and waveform amplitude.
-- LED currents are `led-pa` in the overlay, `[red IR green]` as hex bytes,
-  0.2 mA per LSB (`[60 60 60]` = ~19 mA each). If quality stays low at rest,
-  raise the green current (third byte) while `green` stays below ~240000; the
-  18-bit limit is 262143. VLED is 3.3 V, close to the green LED's needs, so
-  very high green currents may not be reached.
+- The IR LED current is the second byte of `led-pa` in the overlay, 0.2 mA per
+  LSB. The raw level must stay below the 18-bit limit of 262143.
 - Estimator constants (window, quality threshold, tracking range, hold time)
   are at the top of `src/heart_rate.c`.
 
@@ -247,7 +237,7 @@ board green read ~16000 counts on a fingertip and ~6000 on the wrist with no
 usable pulse, at the same setting that gives strong red/IR. Wrist products use
 green, so the next PCB revision should feed VLED+ (pins 9-10) from a 5 V boost
 converter (sized for LED pulses up to 50 mA, with local bulk capacitance).
-Until then heart rate comes from IR or red.
+Until then heart rate comes from IR.
 
 **Sensor VDD.**
 
@@ -260,9 +250,8 @@ with a 1 uF bypass capacitor.
 
 ## Scope
 
-Implemented: MAX30101 initialization, FIFO-pointer polling, sample-rate
-measurement, 1 Hz heart-rate estimation on the best of red/IR/green, RTT
-diagnostics, BMI270 step counting (not yet measured on the board).
+Implemented: heart rate from IR at 1 Hz, BMI270 step counting, Daily and Night
+modes with the LED, button and haptic reminders, RTT output.
 
-Not implemented yet: SpO2, BLE, haptic reminders, motion-artifact handling for
-heart rate, power management. Those come after the heart-rate path is verified on the PCB.
+Not implemented yet: SpO2, BLE, skin temperature, flash logging, motion-artifact
+handling for heart rate, battery level, power management.

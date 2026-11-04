@@ -7,13 +7,6 @@ enum status_led_color {
 };
 
 /*
- * Check the WS2812 is ready.
- *
- * Returns 0 on success, negative errno on failure.
- */
-int status_led_init(void);
-
-/*
  * Show a solid color.
  *
  * Returns 0 on success, negative errno on failure.

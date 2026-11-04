@@ -4,17 +4,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* Effective sample rate set by CONFIG_MAX30101_SR / CONFIG_MAX30101_SMP_AVE. */
+/* Effective sample rate set by smp-sr and smp-ave in the devicetree. */
 #define MAX30101_SAMPLE_RATE_HZ 100
 
 /* The MAX30101 FIFO holds 32 samples. */
 #define MAX30101_FIFO_DEPTH 32
-
-struct max30101_sample {
-	int32_t red;
-	int32_t ir;
-	int32_t green;
-};
 
 /*
  * Initialize the MAX30101 sensor.
@@ -24,7 +18,7 @@ struct max30101_sample {
 int max30101_init(void);
 
 /*
- * Read every new sample from the sensor FIFO, oldest first.
+ * Read every new IR sample from the sensor FIFO, oldest first.
  *
  * Only samples the sensor has actually produced are returned, so consecutive
  * samples are exactly 1/MAX30101_SAMPLE_RATE_HZ apart unless *lost is
@@ -33,6 +27,6 @@ int max30101_init(void);
  *
  * Returns the number of samples stored (0..max), or negative errno.
  */
-int max30101_read_fifo(struct max30101_sample *samples, int max, bool *lost);
+int max30101_read_fifo(int32_t *ir, int max, bool *lost);
 
 #endif /* MAX30101_H */

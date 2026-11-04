@@ -9,14 +9,13 @@
 
 static const struct device *const led_strip = DEVICE_DT_GET(DT_NODELABEL(led_strip));
 
-int status_led_init(void)
-{
-	return device_is_ready(led_strip) ? 0 : -ENODEV;
-}
-
 int status_led_set(enum status_led_color color)
 {
 	struct led_rgb pixel = {.g = APP_LED_LEVEL};
+
+	if (!device_is_ready(led_strip)) {
+		return -ENODEV;
+	}
 
 	if (color == STATUS_LED_WHITE) {
 		pixel.r = APP_LED_LEVEL;

@@ -30,10 +30,6 @@
  *    also strong. A rate far from the previous one must persist before it is
  *    shown. Parabolic interpolation refines the lag.
  * 5. Median of the last 3 estimates.
- *
- * Steps 1-3 run on the red, IR and green channels; the estimate uses the one
- * with the highest quality. Green is normally best on the wrist, but only when
- * its LED is driven properly (it needs a 4.5-5.5 V LED supply).
  */
 
 #if HR_SAMPLE_RATE_HZ != 100
@@ -93,9 +89,6 @@ _Static_assert((WINDOW_LEN + SETTLE_LEN + FS_DEC) / FS_DEC == HR_FIRST_ESTIMATE_
 
 #define MEDIAN_SIZE 3
 
-/* Smoothing for the diagnostic DC and AC levels (time constant ~1 s). */
-#define STATS_ALPHA 0.01f
-
 /*
  * Band-pass filter: two cascaded 2nd-order Butterworth high-pass sections at
  * 0.9 Hz and one 2nd-order Butterworth low-pass at 3 Hz. Coefficients are
@@ -115,22 +108,14 @@ static const float filter_coeffs[][5] = {HP_0_9HZ, HP_0_9HZ, LP_3HZ};
 
 #define NUM_SECTIONS (sizeof(filter_coeffs) / sizeof(filter_coeffs[0]))
 
-struct channel {
-	struct biquad filter[NUM_SECTIONS];
-	int32_t baseline;
-	/* Ring buffer of filtered, decimated samples. */
-	float ring[WINDOW_LEN];
-	float acf[LAG_MAX + 2];
-	float best;
-	bool settling;
-	float dc;
-	float ac_power;
-};
-
-static struct channel channels[HR_NUM_CHANNELS];
+static struct biquad filter[NUM_SECTIONS];
+static int32_t baseline;
+/* Ring buffer of filtered, decimated samples. */
+static float ring[WINDOW_LEN];
+static float acf[LAG_MAX + 2];
 static bool have_baseline;
 static int decimate_count;
-/* Next write position in each ring, and decimated samples seen (saturating). */
+/* Next write position in the ring, and decimated samples seen (saturating). */
 static int ring_idx;
 static int ready_count;
 static int since_estimate;
@@ -185,7 +170,7 @@ static float lag_to_bpm(float lag)
 	return fs_dec * 60.0f / lag;
 }
 
-static bool is_peak(const float *acf, int k)
+static bool is_peak(int k)
 {
 	return acf[k] > acf[k - 1] && acf[k] >= acf[k + 1];
 }
@@ -241,19 +226,19 @@ static void mask_bursts(void)
 }
 
 /*
- * Normalized autocorrelation of one channel's window for lags
- * LAG_MIN-1 .. LAG_MAX+1, and the height of its highest peak.
+ * Normalized autocorrelation of the window for lags LAG_MIN-1 .. LAG_MAX+1.
+ * Sets *settling and returns the height of the highest peak.
  */
-static void compute_acf(struct channel *ch)
+static float compute_acf(bool *settling)
 {
 	int start = ring_idx;
 	float mean = 0.0f;
 
 	for (int i = 0; i < WINDOW_LEN; i++) {
-		window[i] = ch->ring[(start + i) % WINDOW_LEN];
+		window[i] = ring[(start + i) % WINDOW_LEN];
 	}
 
-	ch->settling = window_settling();
+	*settling = window_settling();
 	mask_bursts();
 
 	for (int i = 0; i < WINDOW_LEN; i++) {
@@ -291,15 +276,18 @@ static void compute_acf(struct channel *ch)
 
 		float denom = sqrtf(energy_head * energy_tail);
 
-		ch->acf[k] = denom > 0.0f ? sum / denom : 0.0f;
+		acf[k] = denom > 0.0f ? sum / denom : 0.0f;
 	}
 
-	ch->best = 0.0f;
+	float best = 0.0f;
+
 	for (int k = LAG_MIN; k <= LAG_MAX; k++) {
-		if (is_peak(ch->acf, k) && ch->acf[k] > ch->best) {
-			ch->best = ch->acf[k];
+		if (is_peak(k) && acf[k] > best) {
+			best = acf[k];
 		}
 	}
+
+	return best;
 }
 
 static int quality_percent(float best)
@@ -328,10 +316,10 @@ static void report_bad(struct hr_estimate *out)
 }
 
 /* The strong peak at half of lag k, or 0 if there is none. */
-static int find_half_lag(const float *acf, int k)
+static int find_half_lag(int k)
 {
 	for (int h = LAG_MIN; h <= LAG_MAX; h++) {
-		if (is_peak(acf, h) && abs(2 * h - k) <= 2 && acf[h] >= HALF_LAG_FRAC * acf[k]) {
+		if (is_peak(h) && abs(2 * h - k) <= 2 && acf[h] >= HALF_LAG_FRAC * acf[k]) {
 			return h;
 		}
 	}
@@ -343,19 +331,19 @@ static int find_half_lag(const float *acf, int k)
  * The peak closest to the last rate, or 0. A peak with a strong peak at half
  * its lag is two periods of a faster rate, not this rate.
  */
-static int find_tracked_lag(const float *acf, float best)
+static int find_tracked_lag(float best)
 {
 	int tracked = 0;
 	float tracked_diff = TRACK_BPM;
 
 	for (int k = LAG_MIN; k <= LAG_MAX; k++) {
-		if (!is_peak(acf, k) || acf[k] < TRACK_FRAC * best) {
+		if (!is_peak(k) || acf[k] < TRACK_FRAC * best) {
 			continue;
 		}
 
 		float diff = fabsf(lag_to_bpm(k) - last_bpm);
 
-		if (diff <= tracked_diff && find_half_lag(acf, k) == 0) {
+		if (diff <= tracked_diff && find_half_lag(k) == 0) {
 			tracked_diff = diff;
 			tracked = k;
 		}
@@ -366,21 +354,9 @@ static int find_tracked_lag(const float *acf, float best)
 
 static void estimate(struct hr_estimate *out)
 {
-	enum hr_channel chosen = HR_CHANNEL_RED;
+	float best = compute_acf(&out->settling);
 
-	for (int c = 0; c < HR_NUM_CHANNELS; c++) {
-		compute_acf(&channels[c]);
-		if (channels[c].best > channels[chosen].best) {
-			chosen = c;
-		}
-	}
-
-	const float *acf = channels[chosen].acf;
-	float best = channels[chosen].best;
-
-	out->channel = chosen;
 	out->quality = quality_percent(best);
-	out->settling = channels[chosen].settling;
 
 	if (out->settling || best < (last_bpm > 0.0f ? Q_MIN : Q_START)) {
 		report_bad(out);
@@ -391,13 +367,13 @@ static void estimate(struct hr_estimate *out)
 	int pick = 0;
 
 	for (int k = LAG_MIN; k <= LAG_MAX; k++) {
-		if (is_peak(acf, k) && acf[k] >= PICK_FRAC * best) {
+		if (is_peak(k) && acf[k] >= PICK_FRAC * best) {
 			pick = k;
 			break;
 		}
 	}
 
-	int half = find_half_lag(acf, pick);
+	int half = find_half_lag(pick);
 
 	if (half != 0) {
 		pick = half;
@@ -406,7 +382,7 @@ static void estimate(struct hr_estimate *out)
 	int lag = pick;
 
 	if (last_bpm > 0.0f) {
-		int tracked = find_tracked_lag(acf, best);
+		int tracked = find_tracked_lag(best);
 
 		if (fabsf(lag_to_bpm(pick) - last_bpm) <= TRACK_BPM) {
 			differ_lag = 0;
@@ -450,23 +426,16 @@ static void estimate(struct hr_estimate *out)
 
 void heart_rate_init(void)
 {
-	for (int c = 0; c < HR_NUM_CHANNELS; c++) {
-		struct channel *ch = &channels[c];
-
-		for (size_t i = 0; i < NUM_SECTIONS; i++) {
-			ch->filter[i] = (struct biquad){
-				.b0 = filter_coeffs[i][0],
-				.b1 = filter_coeffs[i][1],
-				.b2 = filter_coeffs[i][2],
-				.a1 = filter_coeffs[i][3],
-				.a2 = filter_coeffs[i][4],
-			};
-		}
-		ch->baseline = 0;
-		ch->best = 0.0f;
-		ch->dc = 0.0f;
-		ch->ac_power = 0.0f;
+	for (size_t i = 0; i < NUM_SECTIONS; i++) {
+		filter[i] = (struct biquad){
+			.b0 = filter_coeffs[i][0],
+			.b1 = filter_coeffs[i][1],
+			.b2 = filter_coeffs[i][2],
+			.a1 = filter_coeffs[i][3],
+			.a2 = filter_coeffs[i][4],
+		};
 	}
+	baseline = 0;
 	have_baseline = false;
 	decimate_count = 0;
 
@@ -484,7 +453,7 @@ void heart_rate_set_sample_rate(float hz)
 	fs_dec = hz / DECIMATION;
 }
 
-bool heart_rate_process(const int32_t samples[HR_NUM_CHANNELS], struct hr_estimate *out)
+bool heart_rate_process(int32_t sample, struct hr_estimate *out)
 {
 	/*
 	 * Subtracting the first sample removes the large DC step the high-pass
@@ -492,39 +461,22 @@ bool heart_rate_process(const int32_t samples[HR_NUM_CHANNELS], struct hr_estima
 	 * is flipped because more blood means less light at the photodiode.
 	 */
 	if (!have_baseline) {
-		for (int c = 0; c < HR_NUM_CHANNELS; c++) {
-			channels[c].baseline = samples[c];
-			channels[c].dc = (float)samples[c];
-		}
+		baseline = sample;
 		have_baseline = true;
 	}
 
-	bool keep = ++decimate_count >= DECIMATION;
+	float filtered = (float)(baseline - sample);
 
-	if (keep) {
-		decimate_count = 0;
+	for (size_t i = 0; i < NUM_SECTIONS; i++) {
+		filtered = biquad_step(&filter[i], filtered);
 	}
 
-	for (int c = 0; c < HR_NUM_CHANNELS; c++) {
-		struct channel *ch = &channels[c];
-		float filtered = (float)(ch->baseline - samples[c]);
-
-		for (size_t i = 0; i < NUM_SECTIONS; i++) {
-			filtered = biquad_step(&ch->filter[i], filtered);
-		}
-
-		ch->dc += STATS_ALPHA * ((float)samples[c] - ch->dc);
-		ch->ac_power += STATS_ALPHA * (filtered * filtered - ch->ac_power);
-
-		if (keep) {
-			ch->ring[ring_idx] = filtered;
-		}
-	}
-
-	if (!keep) {
+	if (++decimate_count < DECIMATION) {
 		return false;
 	}
+	decimate_count = 0;
 
+	ring[ring_idx] = filtered;
 	ring_idx = (ring_idx + 1) % WINDOW_LEN;
 
 	/* Wait for the filter to settle and the window to fill, then estimate once a second. */
@@ -537,18 +489,7 @@ bool heart_rate_process(const int32_t samples[HR_NUM_CHANNELS], struct hr_estima
 	}
 	since_estimate = 0;
 
-	if (out != NULL) {
-		estimate(out);
-	}
+	estimate(out);
 
-	return out != NULL;
-}
-
-void heart_rate_get_stats(enum hr_channel channel, struct hr_channel_stats *stats)
-{
-	const struct channel *ch = &channels[channel];
-
-	stats->dc = (int32_t)ch->dc;
-	stats->ac = (int32_t)sqrtf(ch->ac_power);
-	stats->quality = quality_percent(ch->best);
+	return true;
 }

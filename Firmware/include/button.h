@@ -18,7 +18,4 @@ int button_init(void);
  */
 bool button_pressed(void);
 
-/* The debounced state: true while the button is held down. */
-bool button_is_down(void);
-
 #endif /* BUTTON_H */

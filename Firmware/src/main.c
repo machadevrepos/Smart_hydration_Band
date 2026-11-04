@@ -3,10 +3,11 @@
 #include <zephyr/sys/printk.h>
 
 #include "app_config.h"
+#include "band_mode.h"
 #include "button.h"
+#include "haptic.h"
 #include "heart_rate.h"
 #include "max30101.h"
-#include "status_led.h"
 #include "step_counter.h"
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
@@ -24,9 +25,8 @@ BUILD_ASSERT(HR_SAMPLE_RATE_HZ == MAX30101_SAMPLE_RATE_HZ,
 #define RATE_MIN_HZ 80.0f
 #define RATE_MAX_HZ 120.0f
 
-/* Heart-rate status is printed once a second; diagnostics every 5 s. */
+/* Heart-rate status is printed once a second. */
 #define STATUS_PERIOD_MS 1000
-#define DIAG_PERIOD_MS 5000
 /* While off the skin, repeat the status only this often. */
 #define NO_CONTACT_REPEAT_MS 10000
 
@@ -98,37 +98,36 @@ static const char *quality_word(int quality)
 	return "weak";
 }
 
-static const char *led_color_name(enum status_led_color color)
+static const char *mode_led_name(enum band_mode mode)
 {
-	return color == STATUS_LED_WHITE ? "white" : "green";
+	return mode == BAND_MODE_NIGHT ? "green" : "white";
 }
 
-/*
- * Bring-up: each button press swaps the LED between white and green. "data sent"
- * means the SPI transfer finished; it cannot tell whether an LED received it.
- */
-static void led_bringup_toggle(enum status_led_color *color, uint32_t press)
+static void handle_button_press(uint32_t press)
 {
 	unsigned int secs = (unsigned int)(k_uptime_get() / 1000);
-	int ret;
+	int led_ret = band_mode_toggle();
+	enum band_mode mode = band_mode_get();
+	uint32_t interval = band_mode_interval_s();
 
-	*color = *color == STATUS_LED_WHITE ? STATUS_LED_GREEN : STATUS_LED_WHITE;
-	ret = status_led_set(*color);
+	printk("  %02u:%02u   button press %u: %s Mode, LED %s%s, buzz, next reminder in %u:%02u\n",
+	       secs / 60, secs % 60, press, band_mode_name(mode), mode_led_name(mode),
+	       led_ret == 0 ? "" : " FAILED", interval / 60, interval % 60);
+}
 
-	if (ret == 0) {
-		printk("  %02u:%02u   button press %u: LED %s, data sent\n", secs / 60, secs % 60,
-		       press, led_color_name(*color));
-	} else {
-		printk("  %02u:%02u   button press %u: LED %s, send FAILED (%d)\n", secs / 60,
-		       secs % 60, press, led_color_name(*color), ret);
-	}
+static void print_reminder(void)
+{
+	unsigned int secs = (unsigned int)(k_uptime_get() / 1000);
+	uint32_t interval = band_mode_interval_s();
+
+	printk("  %02u:%02u   reminder: double tap (%s Mode), next in %u:%02u\n", secs / 60,
+	       secs % 60, band_mode_name(band_mode_get()), interval / 60, interval % 60);
 }
 
 static void print_header(void)
 {
 	printk("\n"
-	       "Smart Hydration Band - heart rate and steps\n"
-	       "For heart rate, place the sensor on the wrist and keep still.\n"
+	       "Smart Hydration Band\n"
 	       "\n"
 	       "  time    heart rate    steps   status\n"
 	       "  -----   ----------   ------   ----------------------------\n");
@@ -244,40 +243,16 @@ static void rate_meter_update(struct rate_meter *m, int count)
 	rate_meter_restart(m);
 }
 
-#if APP_PPG_DIAGNOSTICS
-static void print_diagnostics(const struct rate_meter *m)
-{
-	struct hr_channel_stats st[HR_NUM_CHANNELS];
-
-	for (int c = 0; c < HR_NUM_CHANNELS; c++) {
-		heart_rate_get_stats(c, &st[c]);
-	}
-
-	/* dc = raw level, ac = pulse size (band-passed RMS), q = periodicity. */
-	printk("  diag    %d.%d Hz | red dc %d ac %d q %d | ir dc %d ac %d q %d | "
-	       "green dc %d ac %d q %d\n",
-	       (int)m->hz, (int)(m->hz * 10.0f) % 10,
-	       st[HR_CHANNEL_RED].dc, st[HR_CHANNEL_RED].ac, st[HR_CHANNEL_RED].quality,
-	       st[HR_CHANNEL_IR].dc, st[HR_CHANNEL_IR].ac, st[HR_CHANNEL_IR].quality,
-	       st[HR_CHANNEL_GREEN].dc, st[HR_CHANNEL_GREEN].ac, st[HR_CHANNEL_GREEN].quality);
-}
-#endif
-
 int main(void)
 {
-	static struct max30101_sample samples[MAX30101_FIFO_DEPTH];
+	static int32_t ir[MAX30101_FIFO_DEPTH];
 	struct rate_meter rate = {.hz = 0.0f};
 	struct contact contact = {.on = false};
 	struct hr_status status = {0};
-	enum status_led_color led_color = STATUS_LED_WHITE;
 	int led_ret;
 	bool button_ok;
 	uint32_t button_presses = 0;
-	uint32_t sample_index = 0;
 	int64_t next_status_ms = STATUS_PERIOD_MS;
-#if APP_PPG_DIAGNOSTICS
-	int64_t next_diag_ms = DIAG_PERIOD_MS;
-#endif
 	int ret;
 
 	ret = max30101_init();
@@ -286,11 +261,14 @@ int main(void)
 		return ret;
 	}
 
-	/* Show white as soon as possible; heart rate runs even if the LED fails. */
-	led_ret = status_led_init();
-	if (led_ret == 0) {
-		led_ret = status_led_set(led_color);
+	/* Each of these is optional: the rest of the band runs if one fails. */
+	ret = haptic_init();
+	if (ret < 0) {
+		LOG_ERR("Haptic motor unavailable (%d)", ret);
 	}
+
+	/* Show the mode as soon as possible. */
+	led_ret = band_mode_init();
 
 	ret = button_init();
 	button_ok = ret == 0;
@@ -309,26 +287,26 @@ int main(void)
 	{
 		bool ignored;
 
-		(void)max30101_read_fifo(samples, ARRAY_SIZE(samples), &ignored);
+		(void)max30101_read_fifo(ir, ARRAY_SIZE(ir), &ignored);
 	}
 
 	heart_rate_init();
 	print_header();
 
 	if (led_ret == 0) {
-		printk("  LED %s at startup, data sent\n", led_color_name(led_color));
+		printk("  %s Mode, LED %s, next reminder in %u:%02u\n",
+		       band_mode_name(band_mode_get()), mode_led_name(band_mode_get()),
+		       band_mode_interval_s() / 60, band_mode_interval_s() % 60);
 	} else {
-		printk("  LED %s at startup, send FAILED (%d)\n", led_color_name(led_color),
-		       led_ret);
-	}
-	if (button_ok) {
-		printk("  button ready, currently %s\n", button_is_down() ? "DOWN" : "up");
+		printk("  %s Mode, LED FAILED (%d), next reminder in %u:%02u\n",
+		       band_mode_name(band_mode_get()), led_ret, band_mode_interval_s() / 60,
+		       band_mode_interval_s() % 60);
 	}
 	rate_meter_restart(&rate);
 
 	for (;;) {
 		bool lost = false;
-		int count = max30101_read_fifo(samples, ARRAY_SIZE(samples), &lost);
+		int count = max30101_read_fifo(ir, ARRAY_SIZE(ir), &lost);
 
 		if (count < 0) {
 			LOG_WRN("MAX30101 read failed (%d)", count);
@@ -353,26 +331,14 @@ int main(void)
 
 		for (int i = 0; i < count; i++) {
 			struct hr_estimate hr;
-			const int32_t channels[HR_NUM_CHANNELS] = {
-				[HR_CHANNEL_RED] = samples[i].red,
-				[HR_CHANNEL_IR] = samples[i].ir,
-				[HR_CHANNEL_GREEN] = samples[i].green,
-			};
 
-#if APP_RAW_STREAM
-			printk("%u,%d,%d,%d\n", sample_index, samples[i].red, samples[i].ir,
-			       samples[i].green);
-#endif
-			sample_index++;
-
-			if (contact_update(&contact, samples[i].ir)) {
+			if (contact_update(&contact, ir[i])) {
 				heart_rate_init();
 				status.have_estimate = false;
 				status.contact_since_ms = k_uptime_get();
 			}
 
-			/* Keep feeding so the diagnostics stay live; ignore results off skin. */
-			if (heart_rate_process(channels, &hr) && contact.on) {
+			if (contact.on && heart_rate_process(ir[i], &hr)) {
 				status.hr = hr;
 				status.have_estimate = true;
 			}
@@ -380,7 +346,11 @@ int main(void)
 
 		if (button_ok && button_pressed()) {
 			button_presses++;
-			led_bringup_toggle(&led_color, button_presses);
+			handle_button_press(button_presses);
+		}
+
+		if (band_mode_process()) {
+			print_reminder();
 		}
 
 		/* Fixed 1 s cadence, independent of FIFO bursts and the sensor clock. */
@@ -388,13 +358,6 @@ int main(void)
 			next_status_ms += STATUS_PERIOD_MS;
 			print_status(&contact, &status);
 		}
-
-#if APP_PPG_DIAGNOSTICS
-		if (k_uptime_get() >= next_diag_ms) {
-			next_diag_ms += DIAG_PERIOD_MS;
-			print_diagnostics(&rate);
-		}
-#endif
 
 		k_sleep(K_MSEC(APP_POLL_INTERVAL_MS));
 	}
