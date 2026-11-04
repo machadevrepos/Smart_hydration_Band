@@ -3,8 +3,10 @@
 #include <zephyr/sys/printk.h>
 
 #include "app_config.h"
+#include "button.h"
 #include "heart_rate.h"
 #include "max30101.h"
+#include "status_led.h"
 #include "step_counter.h"
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
@@ -94,6 +96,32 @@ static const char *quality_word(int quality)
 		return "fair";
 	}
 	return "weak";
+}
+
+static const char *led_color_name(enum status_led_color color)
+{
+	return color == STATUS_LED_WHITE ? "white" : "green";
+}
+
+/*
+ * Bring-up: each button press swaps the LED between white and green. "data sent"
+ * means the SPI transfer finished; it cannot tell whether an LED received it.
+ */
+static void led_bringup_toggle(enum status_led_color *color, uint32_t press)
+{
+	unsigned int secs = (unsigned int)(k_uptime_get() / 1000);
+	int ret;
+
+	*color = *color == STATUS_LED_WHITE ? STATUS_LED_GREEN : STATUS_LED_WHITE;
+	ret = status_led_set(*color);
+
+	if (ret == 0) {
+		printk("  %02u:%02u   button press %u: LED %s, data sent\n", secs / 60, secs % 60,
+		       press, led_color_name(*color));
+	} else {
+		printk("  %02u:%02u   button press %u: LED %s, send FAILED (%d)\n", secs / 60,
+		       secs % 60, press, led_color_name(*color), ret);
+	}
 }
 
 static void print_header(void)
@@ -241,6 +269,10 @@ int main(void)
 	struct rate_meter rate = {.hz = 0.0f};
 	struct contact contact = {.on = false};
 	struct hr_status status = {0};
+	enum status_led_color led_color = STATUS_LED_WHITE;
+	int led_ret;
+	bool button_ok;
+	uint32_t button_presses = 0;
 	uint32_t sample_index = 0;
 	int64_t next_status_ms = STATUS_PERIOD_MS;
 #if APP_PPG_DIAGNOSTICS
@@ -252,6 +284,18 @@ int main(void)
 	if (ret < 0) {
 		LOG_ERR("MAX30101 initialization failed (%d)", ret);
 		return ret;
+	}
+
+	/* Show white as soon as possible; heart rate runs even if the LED fails. */
+	led_ret = status_led_init();
+	if (led_ret == 0) {
+		led_ret = status_led_set(led_color);
+	}
+
+	ret = button_init();
+	button_ok = ret == 0;
+	if (ret < 0) {
+		LOG_ERR("Button unavailable (%d)", ret);
 	}
 
 	/* Heart rate still runs if the BMI270 fails; steps then show "--". */
@@ -270,6 +314,16 @@ int main(void)
 
 	heart_rate_init();
 	print_header();
+
+	if (led_ret == 0) {
+		printk("  LED %s at startup, data sent\n", led_color_name(led_color));
+	} else {
+		printk("  LED %s at startup, send FAILED (%d)\n", led_color_name(led_color),
+		       led_ret);
+	}
+	if (button_ok) {
+		printk("  button ready, currently %s\n", button_is_down() ? "DOWN" : "up");
+	}
 	rate_meter_restart(&rate);
 
 	for (;;) {
@@ -322,6 +376,11 @@ int main(void)
 				status.hr = hr;
 				status.have_estimate = true;
 			}
+		}
+
+		if (button_ok && button_pressed()) {
+			button_presses++;
+			led_bringup_toggle(&led_color, button_presses);
 		}
 
 		/* Fixed 1 s cadence, independent of FIFO bursts and the sensor clock. */

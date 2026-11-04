@@ -7,6 +7,7 @@
  */
 
 #include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/led/led.h>
 
 /*
  * BMI270 CSB (P0.23) has no pull-up on the PCB and the chip uses it to choose
@@ -58,15 +59,60 @@
 	};
 };
 
+/* Push button SW2: P0.14 to GND, no pull-up on the PCB. */
+&button1 {
+	gpios = <&gpio0 14 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+};
+
 /*
- * The DK board enables SPI1/SPI2 on pins the wristband uses for the BMI270
- * interrupt/CS lines, the haptic motor, and the WS2812 data line. Disable them
- * so those peripherals cannot claim the pins.
+ * WS2812 D4, data on P0.25. SPI is used only to shape the data pulses. The DK's
+ * default pins would claim P0.23 (BMI270 CSB) and P0.24 (motor), so these are
+ * set here. MOSI is the data line. SCK is on P0.22, unconnected on this PCB: the
+ * SPIM stalls without a clock pin, so it needs one even though nothing uses it.
  */
-&spi1 {
-	status = "disabled";
+&pinctrl {
+	led_spi_default: led_spi_default {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 0, 22)>,
+				<NRF_PSEL(SPIM_MOSI, 0, 25)>;
+		};
+	};
+
+	led_spi_sleep: led_spi_sleep {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 0, 22)>,
+				<NRF_PSEL(SPIM_MOSI, 0, 25)>;
+			low-power-enable;
+		};
+	};
 };
 
 &spi2 {
+	compatible = "nordic,nrf-spim";
+	status = "okay";
+	/delete-property/ cs-gpios;
+	pinctrl-0 = <&led_spi_default>;
+	pinctrl-1 = <&led_spi_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	led_strip: ws2812@0 {
+		compatible = "worldsemi,ws2812-spi";
+		reg = <0>; /* Ignored, but required by SPI bindings. */
+		spi-max-frequency = <4000000>;
+
+		chain-length = <1>;
+		color-mapping = <LED_COLOR_ID_GREEN LED_COLOR_ID_RED LED_COLOR_ID_BLUE>;
+		/* 250 ns per SPI bit; values from Zephyr's nRF52 led_strip sample. */
+		spi-one-frame = <0x70>;
+		spi-zero-frame = <0x40>;
+		reset-delay = <300>;
+	};
+};
+
+/*
+ * The DK board enables SPI1 on pins the wristband uses for other signals.
+ * Disable it so it cannot claim them.
+ */
+&spi1 {
 	status = "disabled";
 };

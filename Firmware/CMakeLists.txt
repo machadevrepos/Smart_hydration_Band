@@ -14,4 +14,6 @@ target_sources(app PRIVATE
   src/max30101.c
   src/heart_rate.c
   src/step_counter.c
+  src/status_led.c
+  src/button.c
 )

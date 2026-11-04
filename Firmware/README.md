@@ -17,6 +17,8 @@ steps with the BMI270.
 | BMI270 CSB | P0.23, driven high (no pull-up on the PCB) |
 | BMI270 INT1, INT2 | P0.30, P0.31 (not used yet) |
 | Haptic motor | P0.24 (not used yet) |
+| Status LED | WS2812 D4, data on P0.25 |
+| Push button | SW2, P0.14 to GND (internal pull-up) |
 
 The board target is `nrf52dk/nrf52832` with `boards/nrf52dk_nrf52832.overlay`.
 The MAX30101 driver in nRF Connect SDK v3.3.1 (Zephyr 4.3) takes its sensor
@@ -40,12 +42,16 @@ Firmware/
 │   ├── app_config.h                  sample rate, raw stream, detector tuning
 │   ├── heart_rate.h                  PPG heart-rate estimator API
 │   ├── step_counter.h                BMI270 step counter API
+│   ├── status_led.h                  status LED API
+│   ├── button.h                      push button API
 │   └── max30101.h                    sensor wrapper API
 ├── src/
 │   ├── main.c                        initialization and FIFO polling loop
 │   ├── max30101.c                    Zephyr driver wrapper, FIFO pointer handling
 │   ├── heart_rate.c                  band-pass + windowed autocorrelation HR
-│   └── step_counter.c                BMI270 firmware load and step counter
+│   ├── step_counter.c                BMI270 firmware load and step counter
+│   ├── status_led.c                  WS2812 colors
+│   └── button.c                      button polling and debounce
 └── prj.conf
 ```
 
@@ -131,6 +137,20 @@ start, an error is logged, steps show `--` and heart rate keeps running.
 The count starts at 0 at power-up. Daily reset, wrist-specific tuning and use of
 the interrupt lines are not implemented, and accuracy on the wrist is not yet
 measured.
+
+## Status LED and button
+
+Bring-up behavior: the LED is white at power-up and each button press swaps it
+between white and green. Client modes (white for Daily, green for Night, and a
+buzz on each press) are not implemented yet.
+
+The WS2812 uses Zephyr's `worldsemi,ws2812-spi` driver on SPIM2: MOSI on P0.25,
+SCK on P0.22 (unconnected, but the SPIM stalls without a clock pin). `APP_LED_LEVEL` in `include/app_config.h` sets the brightness.
+Each press prints a line over RTT with its time, number and result. `data sent`
+means the SPI transfer finished, not that an LED received it. On P0.25 each color
+bit lasts 2 us: a 0 is a 250 ns high pulse and a 1 is 750 ns. At `APP_LED_LEVEL` 40
+each update is a 48 us burst, in green-red-blue order, each channel sending
+`00101000` when on. This has not yet been confirmed on the board.
 
 ## Heart-rate algorithm
 

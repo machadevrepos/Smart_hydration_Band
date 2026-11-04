@@ -25,6 +25,9 @@
  */
 #define APP_PPG_DIAGNOSTICS 0
 
+/* Status LED level per color, 0-255. Current and brightness rise with it. */
+#define APP_LED_LEVEL 40
+
 /* Set to 1 to stream raw PPG samples as CSV: sample_index,red,ir,green. */
 #define APP_RAW_STREAM 0
 
