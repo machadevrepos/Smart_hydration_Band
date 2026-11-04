@@ -5,6 +5,7 @@
 #include "app_config.h"
 #include "heart_rate.h"
 #include "max30101.h"
+#include "step_counter.h"
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
@@ -71,7 +72,18 @@ struct hr_status {
 	bool have_estimate;
 	struct hr_estimate hr;
 	int64_t last_no_contact_ms;
+	bool steps_ok;
+	uint32_t steps;
+	uint32_t printed_steps;
 };
+
+/*
+ * Static: logging is deferred, so these must outlive the printk() call. Only
+ * main() writes them.
+ */
+static char rate_text[12];
+static char steps_text[12];
+static char status_text[48];
 
 static const char *quality_word(int quality)
 {
@@ -87,14 +99,47 @@ static const char *quality_word(int quality)
 static void print_header(void)
 {
 	printk("\n"
-	       "Smart Hydration Band - heart rate\n"
-	       "Place the sensor on the wrist and keep still.\n"
+	       "Smart Hydration Band - heart rate and steps\n"
+	       "For heart rate, place the sensor on the wrist and keep still.\n"
 	       "\n"
-	       "  time    heart rate   status\n"
-	       "  -----   ----------   ----------------------------\n");
+	       "  time    heart rate    steps   status\n"
+	       "  -----   ----------   ------   ----------------------------\n");
 }
 
-/* One line: "  mm:ss   <rate>   <status>". */
+/* Heart-rate columns for the current state. */
+static void format_rate(const struct contact *contact, const struct hr_status *st, int64_t now)
+{
+	const struct hr_estimate *hr = &st->hr;
+
+	snprintk(rate_text, sizeof(rate_text), "--");
+
+	if (!contact->on) {
+		snprintk(status_text, sizeof(status_text), "no skin contact");
+	} else if (!st->have_estimate) {
+		int waited = (int)((now - st->contact_since_ms) / 1000);
+		int left = HR_FIRST_ESTIMATE_S - waited;
+
+		snprintk(status_text, sizeof(status_text), "measuring, ready in %d s",
+			 left > 1 ? left : 1);
+	} else if (hr->bpm == 0 && hr->settling) {
+		snprintk(status_text, sizeof(status_text), "settling, keep still (%d)",
+			 hr->quality);
+	} else if (hr->bpm == 0) {
+		snprintk(status_text, sizeof(status_text), "no clear pulse, keep still (%d)",
+			 hr->quality);
+	} else {
+		snprintk(rate_text, sizeof(rate_text), "%3d bpm", hr->bpm);
+		if (hr->held) {
+			snprintk(status_text, sizeof(status_text),
+				 "signal unsure (%d), holding last value", hr->quality);
+		} else {
+			snprintk(status_text, sizeof(status_text), "signal %s (%d)",
+				 quality_word(hr->quality), hr->quality);
+		}
+	}
+}
+
+/* One line: "  mm:ss   <rate>   <steps>   <status>". */
 static void print_status(const struct contact *contact, struct hr_status *st)
 {
 	int64_t now = k_uptime_get();
@@ -102,42 +147,39 @@ static void print_status(const struct contact *contact, struct hr_status *st)
 	unsigned int min = secs / 60;
 	unsigned int sec = secs % 60;
 
+	if (st->steps_ok) {
+		uint32_t steps;
+
+		if (step_counter_read(&steps) == 0) {
+			st->steps = steps;
+		} else {
+			LOG_WRN("BMI270 step read failed");
+		}
+	}
+
 	if (!contact->on) {
-		/* Report once on removal, then only every NO_CONTACT_REPEAT_MS. */
-		if (st->last_no_contact_ms != 0 &&
+		/*
+		 * Off the skin, report once on removal, then only when the step
+		 * count changes or every NO_CONTACT_REPEAT_MS.
+		 */
+		if (st->last_no_contact_ms != 0 && st->steps == st->printed_steps &&
 		    now - st->last_no_contact_ms < NO_CONTACT_REPEAT_MS) {
 			return;
 		}
 		st->last_no_contact_ms = now;
-		printk("  %02u:%02u   --           no skin contact\n", min, sec);
-		return;
-	}
-	st->last_no_contact_ms = 0;
-
-	if (!st->have_estimate) {
-		int waited = (int)((now - st->contact_since_ms) / 1000);
-		int left = HR_FIRST_ESTIMATE_S - waited;
-
-		printk("  %02u:%02u   --           measuring, ready in %d s\n", min, sec,
-		       left > 1 ? left : 1);
-		return;
-	}
-
-	const struct hr_estimate *hr = &st->hr;
-
-	if (hr->bpm == 0 && hr->settling) {
-		printk("  %02u:%02u   --           settling, keep still (%d)\n", min, sec,
-		       hr->quality);
-	} else if (hr->bpm == 0) {
-		printk("  %02u:%02u   --           no clear pulse, keep still (%d)\n", min, sec,
-		       hr->quality);
-	} else if (hr->held) {
-		printk("  %02u:%02u   %3d bpm      signal unsure (%d), holding last value\n", min,
-		       sec, hr->bpm, hr->quality);
 	} else {
-		printk("  %02u:%02u   %3d bpm      signal %s (%d)\n", min, sec, hr->bpm,
-		       quality_word(hr->quality), hr->quality);
+		st->last_no_contact_ms = 0;
 	}
+
+	format_rate(contact, st, now);
+	if (st->steps_ok) {
+		snprintk(steps_text, sizeof(steps_text), "%u", st->steps);
+	} else {
+		snprintk(steps_text, sizeof(steps_text), "--");
+	}
+	st->printed_steps = st->steps;
+
+	printk("  %02u:%02u   %-10s   %6s   %s\n", min, sec, rate_text, steps_text, status_text);
 }
 
 struct rate_meter {
@@ -210,6 +252,20 @@ int main(void)
 	if (ret < 0) {
 		LOG_ERR("MAX30101 initialization failed (%d)", ret);
 		return ret;
+	}
+
+	/* Heart rate still runs if the BMI270 fails; steps then show "--". */
+	ret = step_counter_init();
+	status.steps_ok = ret == 0;
+	if (ret < 0) {
+		LOG_ERR("Step counter unavailable (%d)", ret);
+	}
+
+	/* Loading the BMI270 outlasts the FIFO, so start from an empty one. */
+	{
+		bool ignored;
+
+		(void)max30101_read_fifo(samples, ARRAY_SIZE(samples), &ignored);
 	}
 
 	heart_rate_init();

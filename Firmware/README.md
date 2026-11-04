@@ -1,7 +1,8 @@
 # Smart Hydration Band Firmware
 
 Zephyr firmware for the Smart Hydration Band prototype (Umbra). This first
-stage brings up the MAX30101 optical sensor and computes heart rate.
+stage brings up the MAX30101 optical sensor and computes heart rate, and counts
+steps with the BMI270.
 
 ## Hardware
 
@@ -12,7 +13,9 @@ stage brings up the MAX30101 optical sensor and computes heart rate.
 | I2C SDA | P0.26 |
 | I2C SCL | P0.27 |
 | MAX30101 INT | not connected (polling only) |
-| BMI270 | I2C address `0x68` (not used yet) |
+| BMI270 | I2C address `0x68`, built-in step counter polled once a second |
+| BMI270 CSB | P0.23, driven high (no pull-up on the PCB) |
+| BMI270 INT1, INT2 | P0.30, P0.31 (not used yet) |
 | Haptic motor | P0.24 (not used yet) |
 
 The board target is `nrf52dk/nrf52832` with `boards/nrf52dk_nrf52832.overlay`.
@@ -36,11 +39,13 @@ Firmware/
 ├── include/
 │   ├── app_config.h                  sample rate, raw stream, detector tuning
 │   ├── heart_rate.h                  PPG heart-rate estimator API
+│   ├── step_counter.h                BMI270 step counter API
 │   └── max30101.h                    sensor wrapper API
 ├── src/
 │   ├── main.c                        initialization and FIFO polling loop
 │   ├── max30101.c                    Zephyr driver wrapper, FIFO pointer handling
-│   └── heart_rate.c                  band-pass + windowed autocorrelation HR
+│   ├── heart_rate.c                  band-pass + windowed autocorrelation HR
+│   └── step_counter.c                BMI270 firmware load and step counter
 └── prj.conf
 ```
 
@@ -75,21 +80,18 @@ Skin contact is detected from the raw IR level (`APP_CONTACT_IR_MIN` in
 line per second while the sensor is on the skin:
 
 ```text
-Smart Hydration Band - heart rate
-Place the sensor on the wrist and keep still.
+Smart Hydration Band - heart rate and steps
+For heart rate, place the sensor on the wrist and keep still.
 
-  time    heart rate   status
-  -----   ----------   ----------------------------
-  00:01   --           no skin contact
-  00:04   --           measuring, ready in 11 s
-  00:05   --           measuring, ready in 10 s
-  ...
-  00:15    83 bpm      signal good (85)
-  00:16    84 bpm      signal good (88)
-  00:30    84 bpm      signal fair (72)
-  00:41    84 bpm      signal unsure (44), holding last value
-  00:47   --           no clear pulse, keep still (31)
-  00:52   --           no skin contact
+  time    heart rate    steps   status
+  -----   ----------   ------   ----------------------------
+  00:01   --                0   no skin contact
+  00:04   --                0   measuring, ready in 11 s
+  00:15    83 bpm           0   signal good (85)
+  00:30    84 bpm           0   signal fair (72)
+  00:41    84 bpm           0   signal unsure (44), holding last value
+  00:47   --                0   no clear pulse, keep still (31)
+  00:52   --               12   no skin contact
 ```
 
 - `signal` is the periodicity of the last 8 s (0-100): good is 80 and above,
@@ -97,7 +99,8 @@ Place the sensor on the wrist and keep still.
   can be on half the rate); after that, below 50 the last value is held for up
   to 5 s, then the line shows `no clear pulse` with the score. `settling` means
   the signal level is still decaying after placement.
-- Off the skin the status is printed once, then every 10 s.
+- Off the skin the status is printed once, then when the step count changes or
+  every 10 s.
 - Warnings and errors (FIFO overflow, I2C failures) still appear as normal
   Zephyr log lines.
 
@@ -114,6 +117,20 @@ line every 5 s:
   with the highest `q`. Off the skin IR `dc` is a few thousand; above ~240000
   the LED current is too high (18-bit limit 262143). A larger `ac` at the same
   `dc` means a stronger pulse.
+
+## Step counter
+
+`src/step_counter.c` uses the step counter built into the BMI270: it loads
+Bosch's firmware, enables the counter and reads the 32-bit count once a second.
+It talks to the chip over I2C directly with `CONFIG_BMI270=n`, because Zephyr's
+driver loads the firmware in 256-byte writes that the nRF52832's I2C cannot
+send, and has no step-counter API. The firmware blob comes from the Zephyr tree
+(`drivers/sensor/bosch/bmi270/bmi270_config_file.h`). If the BMI270 fails to
+start, an error is logged, steps show `--` and heart rate keeps running.
+
+The count starts at 0 at power-up. Daily reset, wrist-specific tuning and use of
+the interrupt lines are not implemented, and accuracy on the wrist is not yet
+measured.
 
 ## Heart-rate algorithm
 
@@ -225,7 +242,7 @@ with a 1 uF bypass capacitor.
 
 Implemented: MAX30101 initialization, FIFO-pointer polling, sample-rate
 measurement, 1 Hz heart-rate estimation on the best of red/IR/green, RTT
-diagnostics.
+diagnostics, BMI270 step counting (not yet measured on the board).
 
-Not implemented yet: SpO2, BLE, haptic reminders, BMI270 step counting and
-motion-artifact handling, power management. Those come after the heart-rate path is verified on the PCB.
+Not implemented yet: SpO2, BLE, haptic reminders, motion-artifact handling for
+heart rate, power management. Those come after the heart-rate path is verified on the PCB.
