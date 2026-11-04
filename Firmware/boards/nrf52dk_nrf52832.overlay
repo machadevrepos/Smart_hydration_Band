@@ -22,15 +22,18 @@
 		/* Slot 1 = red, slot 2 = IR, slot 3 = green. */
 		acq-mode = "multi-led";
 		led-slot = <1 2 3 0>;
-		/* 0x60 = ~19 mA per LED (0.2 mA/LSB). */
-		led-pa = [60 60 60];
+		/*
+		 * [red IR green], 0.2 mA/LSB: ~19 mA, ~38 mA, ~19 mA. IR carries the
+		 * wrist pulse on this board, so it gets the extra light.
+		 */
+		led-pa = [60 C0 60];
 		/* 100 Hz, no on-chip averaging. */
 		smp-sr = <100>;
 		smp-ave = <1>;
 		/* 411 us pulse = 18-bit samples; the driver default is 69 us / 15-bit. */
 		led-pw = <411>;
-		/* 31.25 pA/LSB. */
-		adc-rge = <8192>;
+		/* 62.5 pA/LSB, so double the IR light stays in range. */
+		adc-rge = <16384>;
 	};
 };
 

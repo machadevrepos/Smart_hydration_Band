@@ -32,8 +32,8 @@ BUILD_ASSERT(HR_SAMPLE_RATE_HZ == MAX30101_SAMPLE_RATE_HZ,
 #define QUALITY_FAIR 65
 
 /*
- * Skin contact from the raw IR level: ~160000-195000 on wrist and finger at
- * led-pa 0x60, ~1500-3000 off the skin. Contact must hold for 1 s before
+ * Skin contact from the raw IR level: ~160000-195000 on wrist and finger,
+ * ~1500-3000 off the skin (see APP_CONTACT_IR_MIN). Contact must hold for 1 s before
  * measuring (lets the placement transient pass); 0.1 s below the threshold
  * ends it. Either change restarts the estimator, because the step in the
  * signal would otherwise sit in its 8 s window and can look periodic.
@@ -125,11 +125,15 @@ static void print_status(const struct contact *contact, struct hr_status *st)
 
 	const struct hr_estimate *hr = &st->hr;
 
-	if (hr->bpm == 0) {
-		printk("  %02u:%02u   --           no clear pulse, keep still\n", min, sec);
+	if (hr->bpm == 0 && hr->settling) {
+		printk("  %02u:%02u   --           settling, keep still (%d)\n", min, sec,
+		       hr->quality);
+	} else if (hr->bpm == 0) {
+		printk("  %02u:%02u   --           no clear pulse, keep still (%d)\n", min, sec,
+		       hr->quality);
 	} else if (hr->held) {
-		printk("  %02u:%02u   %3d bpm      signal lost, holding last value\n", min, sec,
-		       hr->bpm);
+		printk("  %02u:%02u   %3d bpm      signal unsure (%d), holding last value\n", min,
+		       sec, hr->bpm, hr->quality);
 	} else {
 		printk("  %02u:%02u   %3d bpm      signal %s (%d)\n", min, sec, hr->bpm,
 		       quality_word(hr->quality), hr->quality);

@@ -19,7 +19,8 @@ The board target is `nrf52dk/nrf52832` with `boards/nrf52dk_nrf52832.overlay`.
 The MAX30101 driver in nRF Connect SDK v3.3.1 (Zephyr 4.3) takes its sensor
 settings from devicetree, so they are in the overlay: multi-LED mode with
 red/IR/green in slots 1-3, 100 Hz, no averaging, 411 us pulse width (18-bit;
-the driver default is 69 us / 15-bit), LED current `0x60` per channel. The
+the driver default is 69 us / 15-bit), LED current `[60 C0 60]` with a 62.5
+pA/LSB ADC range. The
 older Kconfig-based driver copied in `Docs/MAX30101` does not match this SDK.
 A dedicated BMD-350 board definition can replace this later; the overlay keeps
 the pin mapping explicit for now.
@@ -86,15 +87,16 @@ Place the sensor on the wrist and keep still.
   00:15    83 bpm      signal good (85)
   00:16    84 bpm      signal good (88)
   00:30    84 bpm      signal fair (72)
-  00:41    84 bpm      signal lost, holding last value
-  00:47   --           no clear pulse, keep still
+  00:41    84 bpm      signal unsure (44), holding last value
+  00:47   --           no clear pulse, keep still (31)
   00:52   --           no skin contact
 ```
 
 - `signal` is the periodicity of the last 8 s (0-100): good is 80 and above,
-  fair 65-79, weak 50-64. The first reading needs 65 (a marginal first lock
+  fair 65-79, weak 50-64. The first reading needs 60 (a marginal first lock
   can be on half the rate); after that, below 50 the last value is held for up
-  to 5 s, then the line shows `no clear pulse`.
+  to 5 s, then the line shows `no clear pulse` with the score. `settling` means
+  the signal level is still decaying after placement.
 - Off the skin the status is printed once, then every 10 s.
 - Warnings and errors (FIFO overflow, I2C failures) still appear as normal
   Zephyr log lines.
@@ -127,8 +129,10 @@ without the motion part:
   on the wrist, but the MAX30101 green LED needs a 4.5-5.5 V LED supply and this
   board gives it 3.3 V (see Hardware caveat). With green unusable the estimator
   falls back to IR or red.
-- **Band-pass 0.5-4 Hz**, decimate to 50 Hz, first difference (removes
-  breathing and pressure drift, sharpens the systolic upstroke).
+- **Band-pass 0.9-3 Hz**, decimate to 50 Hz. Chosen from a raw wrist recording
+  (`Docs/Raw_logs.md`): the pulse is nearly a sine at 1.4 Hz with slow lines at
+  0.2-0.7 Hz. Lower corners locked on half the rate; first-differencing, used
+  earlier, boosted noise. The cost is a weaker signal below about 50 bpm.
 - **Normalized autocorrelation of an 8 s window every second**, over 40-200
   bpm. The output rate is steady and does not depend on individual beats being
   found.
@@ -136,9 +140,16 @@ without the motion part:
   first board it ran about 5% fast (~105 Hz), which would read every heart rate
   5% low. `main.c` counts samples against the calibrated nRF clock over 10 s
   windows and passes the measured rate to the estimator.
-- **Rate tracking** (prefer the near-best peak within 20 bpm of the last value),
-  **half-rate correction** (switch to half the lag if that peak is also
-  strong), parabolic interpolation, median of the last 3 estimates.
+- **Choosing the rate.** The shortest lag with a peak within 90% of the best
+  one, or the peak closest to the last rate (within 20 bpm). A lower peak at a
+  shorter lag is the second bump of each beat, not the rate, so the half lag
+  is taken only if its peak reaches 80% of the chosen one. A different rate must
+  persist for 5 s before it shows, or 10 s against a tracked peak, which also
+  recovers from a wrong first lock. Then parabolic interpolation and the median
+  of the last 3 estimates.
+- **Artifact handling.** One-second segments over 2x the window's median level
+  are zeroed (motion bursts), and a window whose oldest 2 s are over 2.5x its
+  newest 2 s is rejected (the board settling after placement).
 
 Synthetic check (pulse with dicrotic notch, beat-to-beat interval jitter and
 amplitude variation, noise, 0.1 Hz and 0.27 Hz baseline drift): worst average
@@ -172,12 +183,23 @@ handled yet; that needs the BMI270.
 
 ## First board results
 
-At rest, wrist (IR channel, led-pa 0x60): locked 19 s after start, then 82-87
+At rest, wrist (IR channel, led-pa 0x60, adc-rge 8192): locked 19 s after start, then 82-87
 bpm continuously with quality 76-89 (IR dc ~172000, ac 40-70 counts). Finger:
 74-82 bpm once settled, lower quality, one half-rate reading (46 bpm) during
 settling that the first-lock threshold now rejects. Sensor sample rate measured
 105.3-105.4 Hz. No reference device was recorded, so these show stability, not
 accuracy.
+
+A later session with the same settings gave no reading on the wrist in the
+10 s measured, and 66-71 bpm on a finger with a jump to 138 (the rule above).
+The wrist pulse is small (IR ac 40-70 counts on dc ~172000) and depends on
+placement. IR current was then doubled, with no visible gain.
+
+Replaying a 22 s raw wrist recording through the estimator: the previous
+filter gave 2 live readings out of 14, the current one 14 out of 14, at 80-86
+bpm around a 1.4 Hz (84 bpm) spectral peak. This is one short recording with
+no reference device, used to choose the filter, so it is not an accuracy
+result. Firmware with this filter has not yet run on the board.
 
 ## Hardware caveats
 

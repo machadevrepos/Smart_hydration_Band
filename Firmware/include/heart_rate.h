@@ -19,6 +19,8 @@ struct hr_estimate {
 	int quality;
 	/* True when bpm is the last good value, held through a short bad stretch. */
 	bool held;
+	/* True when the signal is still decaying after placement; no new reading. */
+	bool settling;
 	/* Channel with the clearest rhythm, used for this estimate. */
 	enum hr_channel channel;
 };
@@ -27,7 +29,7 @@ struct hr_estimate {
 struct hr_channel_stats {
 	/* Raw level (ADC counts, averaged over ~1 s). */
 	int32_t dc;
-	/* RMS of the 0.5-4 Hz band-passed signal (ADC counts): the pulse size. */
+	/* RMS of the 0.9-3 Hz band-passed signal (ADC counts): the pulse size. */
 	int32_t ac;
 	/* Periodicity of the last 8 s, 0-100. */
 	int quality;

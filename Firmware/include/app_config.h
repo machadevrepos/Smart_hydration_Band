@@ -12,8 +12,9 @@
 
 /*
  * Raw IR level (ADC counts) above which the sensor is taken to be on the skin.
- * Measured ~160000-195000 on skin and ~1500-3000 off it at led-pa 0x60.
- * Scale it with the IR LED current if that changes.
+ * Measured ~160000-195000 on skin and ~1500-3000 off it at IR led-pa 0x60 with
+ * adc-rge 8192. IR 0xC0 with adc-rge 16384 should read about the same (double
+ * the light, half the gain). Scale it if the ratio of the two changes.
  */
 #define APP_CONTACT_IR_MIN 50000
 
