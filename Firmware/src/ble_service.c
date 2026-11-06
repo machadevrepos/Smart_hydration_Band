@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <string.h>
 
 #include <zephyr/bluetooth/bluetooth.h>
@@ -21,6 +22,12 @@ LOG_MODULE_REGISTER(ble_service, LOG_LEVEL_INF);
 
 #define BLE_THREAD_STACK_SIZE 1536
 #define BLE_THREAD_PRIORITY   7
+
+/*
+ * If advertising cannot restart (after a disconnect, or at start-up), try again
+ * this often; otherwise the band could not be reached until power-cycled.
+ */
+#define ADV_RETRY_MS 5000
 
 /* Umbra service: 1ab10000-fde9-42a3-ab5b-82416f9bca6e, characteristics count up. */
 #define UMBRA_UUID_VAL(n) BT_UUID_128_ENCODE(0x1ab10000 + (n), 0xfde9, 0x42a3, 0xab5b, 0x82416f9bca6e)
@@ -138,17 +145,41 @@ BT_GATT_SERVICE_DEFINE(umbra_svc,
 #define UMBRA_ATTR_STEPS 2
 #define UMBRA_ATTR_MODE  5
 
+/* Set while advertising should run but failed to start; the BLE thread retries. */
+static bool advertising_failed;
+
+/* Only the BLE thread calls this. Logs once per failure run. */
 static int start_advertising(void)
 {
 	int err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_2, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
 
+	if (err == -EALREADY) {
+		err = 0;
+	}
+
 	if (err) {
-		LOG_ERR("Advertising failed (%d)", err);
+		if (!advertising_failed) {
+			LOG_ERR("Advertising failed (%d), retrying every %d s", err,
+				ADV_RETRY_MS / 1000);
+		}
+		advertising_failed = true;
 		return err;
 	}
 
+	advertising_failed = false;
 	printk("  BLE advertising as %s\n", CONFIG_BT_DEVICE_NAME);
 	return 0;
+}
+
+static bool is_connected(void)
+{
+	bool connected;
+
+	k_mutex_lock(&state_lock, K_FOREVER);
+	connected = current_conn != NULL;
+	k_mutex_unlock(&state_lock);
+
+	return connected;
 }
 
 static void on_connected(struct bt_conn *conn, uint8_t err)
@@ -308,10 +339,20 @@ static void ble_thread(void *p1, void *p2, void *p3)
 	ARG_UNUSED(p2);
 	ARG_UNUSED(p3);
 
-	for (;;) {
-		k_sem_take(&ble_wake, K_FOREVER);
+	int64_t adv_attempt_ms = 0;
 
-		if (atomic_set(&restart_advertising, 0) != 0) {
+	for (;;) {
+		/* Wake on its own to retry while advertising is down. */
+		(void)k_sem_take(&ble_wake, advertising_failed ? K_MSEC(ADV_RETRY_MS) : K_FOREVER);
+
+		bool restart = atomic_set(&restart_advertising, 0) != 0;
+
+		if (advertising_failed && is_connected()) {
+			/* Only one connection: advertising resumes after it ends. */
+			advertising_failed = false;
+		} else if (restart ||
+			   (advertising_failed && k_uptime_get() - adv_attempt_ms >= ADV_RETRY_MS)) {
+			adv_attempt_ms = k_uptime_get();
 			(void)start_advertising();
 		}
 		if (atomic_set(&telemetry_pending, 0) != 0) {
@@ -342,12 +383,12 @@ int ble_service_init(void)
 		return err;
 	}
 
-	err = start_advertising();
-	if (err) {
-		return err;
-	}
-
 	started = true;
+
+	/* The BLE thread starts advertising, and keeps retrying if it fails. */
+	atomic_set(&restart_advertising, 1);
+	k_sem_give(&ble_wake);
+
 	return 0;
 }
 
