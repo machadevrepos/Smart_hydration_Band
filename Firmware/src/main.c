@@ -28,6 +28,9 @@ BUILD_ASSERT(HR_SAMPLE_RATE_HZ == MAX30101_SAMPLE_RATE_HZ,
 #define RATE_MIN_HZ 80.0f
 #define RATE_MAX_HZ 120.0f
 
+/* Set once, in prj.conf, and also reported over BLE by the Device Information Service. */
+#define FIRMWARE_VERSION CONFIG_BT_DIS_FW_REV_STR
+
 /* Heart-rate status is printed once a second. */
 #define STATUS_PERIOD_MS 1000
 #define BATTERY_PERIOD_MS 10000
@@ -176,7 +179,7 @@ static void publish_telemetry(const struct contact *contact, const struct hr_sta
 static void print_header(void)
 {
 	printk("\n"
-	       "Smart Hydration Band\n"
+	       "Smart Hydration Band, firmware " FIRMWARE_VERSION "\n"
 	       "\n"
 	       "  time    heart rate    steps   status\n"
 	       "  -----   ----------   ------   ----------------------------\n");

@@ -95,7 +95,7 @@ Skin contact is detected from the raw IR level (`APP_CONTACT_IR_MIN` in
 line per second while the sensor is on the skin:
 
 ```text
-Smart Hydration Band
+Smart Hydration Band, firmware 1.0.0
 
   time    heart rate    steps   status
   -----   ----------   ------   ----------------------------
@@ -197,6 +197,7 @@ the phone may choose differently.
 | --- | --- | --- | --- | --- |
 | Heart Rate | Measurement | `0x2A37` | Notify | Standard: flags byte, then bpm. Sent with each reading |
 | Battery | Battery Level | `0x2A19` | Read, notify | 0-100 %, on change |
+| Device Information | Firmware Revision | `0x2A26` | Read | Firmware version string, for example `1.0.0` |
 | Umbra `1ab10000-fde9-42a3-ab5b-82416f9bca6e` | Steps | `1ab10001-...` | Read, notify | 32-bit little endian, on change |
 | | Mode | `1ab10002-...` | Read, notify | 1 byte: 0 Daily, 1 Night, on change |
 | | Haptic | `1ab10003-...` | Write | 1 byte: 1 fires the double tap |
