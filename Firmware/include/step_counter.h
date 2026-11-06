@@ -18,4 +18,11 @@ int step_counter_init(void);
  */
 int step_counter_read(uint32_t *steps);
 
+/*
+ * Turn the accelerometer off before the band powers off.
+ *
+ * Returns 0 on success, negative errno on failure.
+ */
+int step_counter_shutdown(void);
+
 #endif /* STEP_COUNTER_H */

@@ -33,6 +33,9 @@ BUILD_ASSERT(DT_PROP(MAX30101_NODE, led_pw) == 411, "led-pw must be 411 (18-bit 
 #define REG_FIFO_WR_PTR 0x04
 #define FIFO_PTR_MASK   0x1f
 
+#define REG_MODE_CONFIG 0x09
+#define MODE_SHDN       BIT(7)
+
 static const struct device *const max30101_dev = DEVICE_DT_GET(MAX30101_NODE);
 static const struct i2c_dt_spec max30101_i2c = I2C_DT_SPEC_GET(MAX30101_NODE);
 
@@ -44,6 +47,12 @@ int max30101_init(void)
 	}
 
 	return 0;
+}
+
+int max30101_shutdown(void)
+{
+	/* MODE_CONFIG SHDN: LEDs and sampling off, registers kept, under 1 uA. */
+	return i2c_reg_update_byte_dt(&max30101_i2c, REG_MODE_CONFIG, MODE_SHDN, MODE_SHDN);
 }
 
 /* Fetch one frame through the Zephyr driver. This pops one sample from the FIFO. */

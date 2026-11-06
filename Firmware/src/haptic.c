@@ -76,6 +76,20 @@ int haptic_init(void)
 	return 0;
 }
 
+void haptic_stop(void)
+{
+	static struct k_work_sync sync;
+
+	if (!motor_ready) {
+		return;
+	}
+
+	k_mutex_lock(&start_lock, K_FOREVER);
+	(void)k_work_cancel_delayable_sync(&pattern_work, &sync);
+	(void)gpio_pin_set_dt(&motor, 0);
+	k_mutex_unlock(&start_lock);
+}
+
 void haptic_buzz(void)
 {
 	pattern_start(pattern_buzz, ARRAY_SIZE(pattern_buzz));

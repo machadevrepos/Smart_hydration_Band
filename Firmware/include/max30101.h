@@ -29,4 +29,12 @@ int max30101_init(void);
  */
 int max30101_read_fifo(int32_t *ir, int max, bool *lost);
 
+/*
+ * Put the sensor in its shutdown mode before the band powers off. Works over
+ * I2C even if the Zephyr driver did not start.
+ *
+ * Returns 0 on success, negative errno on failure.
+ */
+int max30101_shutdown(void);
+
 #endif /* MAX30101_H */

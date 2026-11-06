@@ -18,4 +18,11 @@ int button_init(void);
  */
 bool button_pressed(void);
 
+/*
+ * Make a press wake the band from system off. Call just before powering off.
+ *
+ * Returns 0 on success, negative errno on failure.
+ */
+int button_enable_wake(void);
+
 #endif /* BUTTON_H */

@@ -27,6 +27,18 @@
  */
 #define APP_CONTACT_IR_MIN 50000
 
+/*
+ * Low battery: below APP_BATTERY_OFF_MV for APP_BATTERY_OFF_READINGS readings in
+ * a row (10 s apart, so a motor dip never counts) the band switches itself off
+ * to protect the LiPo and avoid brown-out resets. 3.3 V is under 5% left.
+ * Readings below APP_BATTERY_VALID_MV are taken as a measurement fault, not a
+ * flat battery, so a broken divider cannot keep switching the band off.
+ * Check the measured voltage against a multimeter before relying on this.
+ */
+#define APP_BATTERY_OFF_MV       3300
+#define APP_BATTERY_OFF_READINGS 6
+#define APP_BATTERY_VALID_MV     2500
+
 /* Status LED level per color, 0-255. Current and brightness rise with it. */
 #define APP_LED_LEVEL 40
 

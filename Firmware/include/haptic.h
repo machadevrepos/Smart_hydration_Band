@@ -20,4 +20,7 @@ void haptic_buzz(void);
 /* Two short firm pulses: the reminder to drink water. */
 void haptic_double_tap(void);
 
+/* Stop any pattern and leave the motor off. Waits for a running step to end. */
+void haptic_stop(void);
+
 #endif /* HAPTIC_H */

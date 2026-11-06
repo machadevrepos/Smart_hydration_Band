@@ -1,5 +1,6 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/poweroff.h>
 #include <zephyr/sys/printk.h>
 
 #include "app_config.h"
@@ -10,6 +11,7 @@
 #include "haptic.h"
 #include "heart_rate.h"
 #include "max30101.h"
+#include "status_led.h"
 #include "step_counter.h"
 #include "watchdog.h"
 
@@ -90,6 +92,8 @@ struct hr_status {
 	uint32_t printed_steps;
 	bool battery_ok;
 	bool have_battery;
+	/* Consecutive readings below APP_BATTERY_OFF_MV. */
+	int low_battery_readings;
 	uint8_t battery_percent;
 };
 
@@ -138,6 +142,48 @@ static void print_reminder(void)
 	       secs % 60, band_mode_name(band_mode_get()), interval / 60, interval % 60);
 }
 
+/*
+ * Switch the band off on a flat battery, with everything that would keep
+ * drawing current quiet first. A button press wakes it (a fresh start in Daily
+ * Mode); if the battery is still flat it switches off again a minute later.
+ * Does not return.
+ */
+static void power_off_low_battery(int32_t millivolts)
+{
+	unsigned int secs = (unsigned int)(k_uptime_get() / 1000);
+
+	printk("  %02u:%02u   battery %d mV: switching off, charge it then press the button\n",
+	       secs / 60, secs % 60, millivolts);
+
+	haptic_stop();
+	(void)status_led_set(STATUS_LED_OFF);
+	(void)max30101_shutdown();
+	(void)step_counter_shutdown();
+	if (button_enable_wake() < 0) {
+		printk("  button wake unavailable: use the power switch to restart\n");
+	}
+
+	sys_poweroff();
+}
+
+static void check_low_battery(struct hr_status *st, int32_t millivolts)
+{
+	if (millivolts < APP_BATTERY_VALID_MV) {
+		/* Not a battery that could still run the band: a measurement fault. */
+		st->low_battery_readings = 0;
+		return;
+	}
+
+	if (millivolts >= APP_BATTERY_OFF_MV) {
+		st->low_battery_readings = 0;
+		return;
+	}
+
+	if (++st->low_battery_readings >= APP_BATTERY_OFF_READINGS) {
+		power_off_low_battery(millivolts);
+	}
+}
+
 static void update_battery(struct hr_status *st)
 {
 	unsigned int secs = (unsigned int)(k_uptime_get() / 1000);
@@ -159,6 +205,8 @@ static void update_battery(struct hr_status *st)
 
 	st->have_battery = true;
 	st->battery_percent = percent;
+
+	check_low_battery(st, millivolts);
 }
 
 /* Send the reading the status line just showed. A reading needs skin contact. */

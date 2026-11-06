@@ -227,6 +227,12 @@ int step_counter_init(void)
 	return write_reg(REG_PWR_CONF, pwr_conf | PWR_CONF_ADV_SAVE);
 }
 
+int step_counter_shutdown(void)
+{
+	/* Accelerometer, gyro, aux and temperature off: the chip draws a few uA. */
+	return write_reg(REG_PWR_CTRL, 0x00);
+}
+
 int step_counter_read(uint32_t *steps)
 {
 	uint8_t rx[STEP_OUT_LEN];

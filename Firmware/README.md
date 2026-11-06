@@ -209,6 +209,20 @@ The battery percentage uses a typical LiPo curve and has not been calibrated.
 Battery is measured and printed every 10 s, and a reading taken while the motor runs may
 dip.
 
+**Low battery.** After six readings in a row (one minute) below 3.3 V, under 5%
+left, the band switches itself off: motor and LED off, MAX30101 and BMI270 shut
+down, then nRF52 system off. A flat LiPo otherwise ends in brown-out resets and
+erratic behavior. The LED going dark is the sign. Charge it, then press the
+button (or cycle the power switch) to start again; if the battery is still
+under 3.3 V it switches off again after a minute. Readings under 2.5 V are taken
+as a measurement fault and ignored, so a broken divider cannot keep the band off.
+The thresholds are in `include/app_config.h`. Because the battery reading is not
+calibrated, compare the RTT millivolts with a multimeter before shipping.
+
+When it's off this way, the WS2812 still draws its idle current (roughly 1 mA)
+from the 3.3 V regulator, so the battery keeps draining slowly. For storage or
+shipping, use the power switch (SW1), which disconnects the battery.
+
 **Transition:** the current app reads only the Nordic UART Service, so that stays
 until the app uses the services above. It sends a JSON line a second, only once
 subscribed, and accepts text containing `trigger_haptic`:

@@ -4,6 +4,7 @@
 enum status_led_color {
 	STATUS_LED_WHITE,
 	STATUS_LED_GREEN,
+	STATUS_LED_OFF,
 };
 
 /*

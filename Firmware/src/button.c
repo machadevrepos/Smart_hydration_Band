@@ -35,6 +35,15 @@ int button_init(void)
 	return 0;
 }
 
+int button_enable_wake(void)
+{
+	/*
+	 * A level interrupt sets the pin's SENSE, which is what wakes the nRF52
+	 * from system off. The wake is a reset, so no handler is needed.
+	 */
+	return gpio_pin_interrupt_configure_dt(&button, GPIO_INT_LEVEL_ACTIVE);
+}
+
 bool button_pressed(void)
 {
 	int ret = gpio_pin_get_dt(&button);
