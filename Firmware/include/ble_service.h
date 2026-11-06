@@ -19,6 +19,8 @@ struct ble_telemetry {
 	bool night_mode;
 	bool battery_valid;
 	uint8_t battery_percent;
+	/* Latest SpO2 in percent while it is recent, 0 when there is none. */
+	uint8_t spo2;
 };
 
 /*

@@ -55,6 +55,8 @@ static struct {
 	bool steps_valid;
 	uint32_t steps_start;
 	uint32_t steps_last;
+	uint8_t spo2;
+	uint8_t spo2_quality;
 } period;
 
 void data_log_encode(const struct data_log_record *rec, uint8_t *out)
@@ -67,6 +69,9 @@ void data_log_encode(const struct data_log_record *rec, uint8_t *out)
 	out[13] = rec->hr_max;
 	out[14] = rec->tens_of_seconds;
 	out[15] = rec->flags;
+	out[16] = rec->spo2;
+	out[17] = rec->spo2_quality;
+	sys_put_le16(0, &out[18]);
 }
 
 static void decode(const uint8_t *in, struct data_log_record *rec)
@@ -79,6 +84,8 @@ static void decode(const uint8_t *in, struct data_log_record *rec)
 	rec->hr_max = in[13];
 	rec->tens_of_seconds = in[14];
 	rec->flags = in[15];
+	rec->spo2 = in[16];
+	rec->spo2_quality = in[17];
 }
 
 static uint16_t slot_id(uint32_t seq)
@@ -219,6 +226,7 @@ static void open_period(bool night, bool steps_valid, uint32_t steps)
 	period.hr_sum = 0;
 	period.hr_count = 0;
 	period.hr_max = 0;
+	/* spo2 is left alone: a reading noted between periods belongs to this one. */
 	period.steps_valid = steps_valid;
 	period.steps_start = steps;
 	period.steps_last = steps;
@@ -229,12 +237,16 @@ static void close_period(void)
 	struct data_log_record rec = {
 		.boot = boot,
 		.hr_max = period.hr_max,
+		.spo2 = period.spo2,
+		.spo2_quality = period.spo2_quality,
 		.tens_of_seconds = (uint8_t)MIN((period.seconds + 5) / 10, UINT8_MAX),
 		.flags = period.night ? DATA_LOG_FLAG_NIGHT : 0,
 	};
 	uint32_t boot_utc;
 
 	period.open = false;
+	period.spo2 = 0;
+	period.spo2_quality = 0;
 	if (fs == NULL || period.seconds == 0) {
 		return;
 	}
@@ -262,6 +274,12 @@ static void close_period(void)
 	if (k_msgq_put(&write_queue, &rec, K_NO_WAIT) < 0) {
 		LOG_WRN("Data log queue full, record dropped");
 	}
+}
+
+void data_log_note_spo2(uint8_t percent, uint8_t quality)
+{
+	period.spo2 = percent;
+	period.spo2_quality = quality;
 }
 
 void data_log_add_second(int heart_rate, bool steps_valid, uint32_t steps, bool night)

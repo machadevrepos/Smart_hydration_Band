@@ -29,8 +29,14 @@
  * 13  uint8  hr_max      highest heart rate in bpm, 0 = none
  * 14  uint8  seconds/10  length of the period in tens of seconds
  * 15  uint8  flags       DATA_LOG_FLAG_*
+ * 16  uint8  spo2        SpO2 % measured in the period, 0 = none
+ * 17  uint8  spo2_qual   quality of that SpO2 reading, 0-100
+ * 18  uint16 reserved    0
+ *
+ * Format version 2 (version 1 was 16 bytes, without SpO2).
  */
-#define DATA_LOG_RECORD_LEN 16
+#define DATA_LOG_RECORD_LEN     20
+#define DATA_LOG_FORMAT_VERSION 2
 
 #define DATA_LOG_FLAG_UTC   BIT(0) /* time is UTC; otherwise seconds since boot */
 #define DATA_LOG_FLAG_NIGHT BIT(1) /* the period was in Night Mode */
@@ -45,6 +51,8 @@ struct data_log_record {
 	uint8_t hr_max;
 	uint8_t tens_of_seconds;
 	uint8_t flags;
+	uint8_t spo2;
+	uint8_t spo2_quality;
 };
 
 /*
@@ -62,6 +70,12 @@ int data_log_init(void);
  * mode changed.
  */
 void data_log_add_second(int heart_rate, bool steps_valid, uint32_t steps, bool night);
+
+/*
+ * Note an SpO2 reading; it goes into the record of the period in progress (the
+ * latest one, if there are several). Main loop only.
+ */
+void data_log_note_spo2(uint8_t percent, uint8_t quality);
 
 /* Write the period in progress now and wait for it. Before powering off. */
 void data_log_flush(void);

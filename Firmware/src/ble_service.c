@@ -19,6 +19,7 @@
 #include "ble_service.h"
 #include "haptic.h"
 #include "data_log.h"
+#include "spo2.h"
 #include "wall_clock.h"
 
 LOG_MODULE_REGISTER(ble_service, LOG_LEVEL_INF);
@@ -52,11 +53,21 @@ static struct bt_uuid_128 umbra_time_uuid = BT_UUID_INIT_128(UMBRA_UUID_VAL(5));
 static struct bt_uuid_128 umbra_quiet_uuid = BT_UUID_INIT_128(UMBRA_UUID_VAL(6));
 static struct bt_uuid_128 umbra_log_control_uuid = BT_UUID_INIT_128(UMBRA_UUID_VAL(7));
 static struct bt_uuid_128 umbra_log_data_uuid = BT_UUID_INIT_128(UMBRA_UUID_VAL(8));
+static struct bt_uuid_128 umbra_spo2_uuid = BT_UUID_INIT_128(UMBRA_UUID_VAL(9));
+
+/*
+ * SpO2 value: status uint8 (enum spo2_status), last valid SpO2 % uint8 (0 =
+ * none), its quality uint8, reserved uint8, UTC seconds of that reading uint32
+ * (0 if the time was not known), latest attempt's R x 1000 uint16. Write 1 to
+ * measure now.
+ */
+#define SPO2_VALUE_LEN   10
+#define SPO2_MEASURE_NOW 1
 
 #define LOG_CONTROL_LEN    12
-#define LOG_FORMAT_VERSION 1
-/* With a 247-byte MTU, 15 records (240 bytes) go in one notification. */
-#define LOG_RECORDS_PER_NOTIFY_MAX 15
+#define LOG_FORMAT_VERSION DATA_LOG_FORMAT_VERSION
+/* With a 247-byte MTU, 12 records (240 bytes) go in one notification. */
+#define LOG_RECORDS_PER_NOTIFY_MAX 12
 /*
  * During a log transfer ask for a 15-30 ms connection interval, then the usual
  * 200-400 ms (prj.conf). The phone may refuse either; the transfer still works.
@@ -77,8 +88,11 @@ static struct bt_uuid_128 umbra_log_data_uuid = BT_UUID_INIT_128(UMBRA_UUID_VAL(
  * The Nordic UART JSON line is for the current app, which reads nothing else.
  * Remove it, with CONFIG_BT_NUS, once the app uses the services above.
  */
-/* Longest: {"session_active":false,"heart_rate":200,"steps":4294967295,"battery":100}\n */
-#define JSON_LINE_MAX 88
+/*
+ * Longest:
+ * {"session_active":false,"heart_rate":200,"steps":4294967295,"battery":100,"spo2":100}\n
+ */
+#define JSON_LINE_MAX 100
 #define NUS_COMMAND_BUFFER_LEN 64
 #define NUS_COMMAND_TRIGGER_HAPTIC "trigger_haptic"
 
@@ -373,6 +387,58 @@ static ssize_t write_log_control(struct bt_conn *conn, const struct bt_gatt_attr
 	return len;
 }
 
+/* The SpO2 value, SPO2_VALUE_LEN bytes; see its definition above. */
+static void encode_spo2(uint8_t *value)
+{
+	struct spo2_result res;
+	uint32_t boot_utc;
+	uint32_t utc_s = 0;
+
+	spo2_get_result(&res);
+	if (res.uptime_ms != 0 && wall_clock_boot_utc(&boot_utc)) {
+		utc_s = boot_utc + (uint32_t)(res.uptime_ms / 1000);
+	}
+
+	value[0] = (uint8_t)res.status;
+	value[1] = res.percent;
+	value[2] = res.quality;
+	value[3] = 0;
+	sys_put_le32(utc_s, &value[4]);
+	sys_put_le16(res.ratio_milli, &value[8]);
+}
+
+static ssize_t read_spo2(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
+			 uint16_t len, uint16_t offset)
+{
+	uint8_t value[SPO2_VALUE_LEN];
+
+	encode_spo2(value);
+	return bt_gatt_attr_read(conn, attr, buf, len, offset, value, sizeof(value));
+}
+
+/* Write 1 to measure now; the result is notified when it is done (~35 s). */
+static ssize_t write_spo2(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf,
+			  uint16_t len, uint16_t offset, uint8_t flags)
+{
+	ARG_UNUSED(conn);
+	ARG_UNUSED(attr);
+	ARG_UNUSED(flags);
+
+	if (offset != 0) {
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+	}
+	if (len != 1) {
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+	}
+	if (*(const uint8_t *)buf != SPO2_MEASURE_NOW) {
+		return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
+	}
+
+	printk("  BLE command: measure SpO2\n");
+	spo2_request();
+	return len;
+}
+
 BT_GATT_SERVICE_DEFINE(umbra_svc,
 	BT_GATT_PRIMARY_SERVICE(&umbra_service_uuid),
 	BT_GATT_CHARACTERISTIC(&umbra_steps_uuid.uuid, BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
@@ -399,12 +465,17 @@ BT_GATT_SERVICE_DEFINE(umbra_svc,
 	BT_GATT_CHARACTERISTIC(&umbra_log_data_uuid.uuid, BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_NONE,
 			       NULL, NULL, NULL),
 	BT_GATT_CCC(NULL, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+	BT_GATT_CHARACTERISTIC(&umbra_spo2_uuid.uuid,
+			       BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY,
+			       BT_GATT_PERM_READ | BT_GATT_PERM_WRITE, read_spo2, write_spo2, NULL),
+	BT_GATT_CCC(NULL, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 );
 
 /* Positions of the value attributes in umbra_svc, for notifying. */
 #define UMBRA_ATTR_STEPS    2
 #define UMBRA_ATTR_MODE     5
 #define UMBRA_ATTR_LOG_DATA 18
+#define UMBRA_ATTR_SPO2     21
 
 /*
  * Send the log from seq from (0 = oldest) as notifications on Log data, as many
@@ -591,7 +662,8 @@ static int format_json_line(const struct ble_telemetry *t, char *line, size_t si
 	if (t->battery_valid) {
 		len += snprintk(&line[len], size - len, ",\"battery\":%u", t->battery_percent);
 	}
-	len += snprintk(&line[len], size - len, "}\n");
+	/* Like heart_rate, always sent: 0 means no recent reading. */
+	len += snprintk(&line[len], size - len, ",\"spo2\":%u}\n", t->spo2);
 
 	return len;
 }
@@ -660,6 +732,19 @@ static void send_updates(const struct ble_telemetry *t)
 		(void)bt_bas_set_battery_level(t->battery_percent);
 	}
 
+	/* SpO2 changes rarely: notify when its status or reading changes. */
+	{
+		static uint8_t sent_spo2[SPO2_VALUE_LEN];
+		uint8_t value[SPO2_VALUE_LEN];
+
+		encode_spo2(value);
+		if (!sent_any || memcmp(value, sent_spo2, sizeof(value)) != 0) {
+			(void)bt_gatt_notify(NULL, &umbra_svc.attrs[UMBRA_ATTR_SPO2], value,
+					     sizeof(value));
+			memcpy(sent_spo2, value, sizeof(value));
+		}
+	}
+
 	sent = *t;
 	sent_any = true;
 
@@ -711,7 +796,8 @@ static int check_attr_positions(void)
 {
 	if (bt_uuid_cmp(umbra_svc.attrs[UMBRA_ATTR_STEPS].uuid, &umbra_steps_uuid.uuid) != 0 ||
 	    bt_uuid_cmp(umbra_svc.attrs[UMBRA_ATTR_MODE].uuid, &umbra_mode_uuid.uuid) != 0 ||
-	    bt_uuid_cmp(umbra_svc.attrs[UMBRA_ATTR_LOG_DATA].uuid, &umbra_log_data_uuid.uuid) != 0) {
+	    bt_uuid_cmp(umbra_svc.attrs[UMBRA_ATTR_LOG_DATA].uuid, &umbra_log_data_uuid.uuid) != 0 ||
+	    bt_uuid_cmp(umbra_svc.attrs[UMBRA_ATTR_SPO2].uuid, &umbra_spo2_uuid.uuid) != 0) {
 		LOG_ERR("Umbra service attribute positions are wrong; fix UMBRA_ATTR_*");
 		return -EFAULT;
 	}

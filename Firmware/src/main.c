@@ -263,6 +263,16 @@ static void update_battery(struct hr_status *st)
  */
 static void publish_telemetry(const struct contact *contact, const struct hr_status *st)
 {
+	struct spo2_result res;
+	uint8_t spo2 = 0;
+
+	/* A spot check stays current until the next one is due, plus a margin. */
+	spo2_get_result(&res);
+	if (res.uptime_ms != 0 && k_uptime_get() - res.uptime_ms <=
+					  (int64_t)(APP_SPO2_INTERVAL_MIN + 5) * 60 * 1000) {
+		spo2 = res.percent;
+	}
+
 	data_log_add_second(contact->on && st->have_estimate ? st->hr.bpm : 0, st->steps_ok,
 			    st->steps, band_mode_get() == BAND_MODE_NIGHT);
 
@@ -273,6 +283,7 @@ static void publish_telemetry(const struct contact *contact, const struct hr_sta
 		.night_mode = band_mode_get() == BAND_MODE_NIGHT,
 		.battery_valid = st->have_battery,
 		.battery_percent = st->battery_percent,
+		.spo2 = spo2,
 	};
 
 	ble_service_publish(&telemetry);
@@ -523,6 +534,7 @@ static void run_spo2(const struct contact *contact, const struct hr_status *st)
 	}
 	if (events & SPO2_EVENT_DONE) {
 		if (res.status == SPO2_STATUS_OK) {
+			data_log_note_spo2(res.percent, res.quality);
 			printk("  %02u:%02u   SpO2 %u%% (quality %u, R %u.%03u)
 ", secs / 60,
 			       secs % 60, res.percent, res.quality, res.ratio_milli / 1000,
