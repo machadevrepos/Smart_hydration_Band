@@ -8,6 +8,7 @@
 #include "battery.h"
 #include "ble_service.h"
 #include "button.h"
+#include "data_log.h"
 #include "haptic.h"
 #include "heart_rate.h"
 #include "max30101.h"
@@ -198,6 +199,9 @@ static void power_off_low_battery(int32_t millivolts)
 	printk("  %02u:%02u   battery %d mV: switching off, charge it then press the button\n",
 	       secs / 60, secs % 60, millivolts);
 
+	/* Keep the steps and heart rate of the period in progress. */
+	data_log_flush();
+
 	haptic_stop();
 	(void)status_led_set(STATUS_LED_OFF);
 	(void)max30101_shutdown();
@@ -252,9 +256,15 @@ static void update_battery(struct hr_status *st)
 	check_low_battery(st, millivolts);
 }
 
-/* Send the reading the status line just showed. A reading needs skin contact. */
+/*
+ * Send the reading the status line just showed, and add it to the flash log.
+ * A reading needs skin contact.
+ */
 static void publish_telemetry(const struct contact *contact, const struct hr_status *st)
 {
+	data_log_add_second(contact->on && st->have_estimate ? st->hr.bpm : 0, st->steps_ok,
+			    st->steps, band_mode_get() == BAND_MODE_NIGHT);
+
 	struct ble_telemetry telemetry = {
 		.heart_rate = contact->on && st->have_estimate ? st->hr.bpm : 0,
 		.steps_valid = st->steps_ok,
@@ -520,6 +530,12 @@ int main(void)
 
 	/* Show the mode as soon as possible; resume it after a watchdog reset. */
 	led_ret = band_mode_init(watchdog_reset_kept_ram(), &mode_restored);
+
+	/* Steps and heart rate in flash, for the app to fetch when it connects. */
+	ret = data_log_init();
+	if (ret < 0) {
+		LOG_ERR("Data log unavailable, nothing is stored while disconnected (%d)", ret);
+	}
 
 	ret = button_init();
 	button_ok = ret == 0;

@@ -18,11 +18,12 @@
 #include "band_mode.h"
 #include "ble_service.h"
 #include "haptic.h"
+#include "data_log.h"
 #include "wall_clock.h"
 
 LOG_MODULE_REGISTER(ble_service, LOG_LEVEL_INF);
 
-#define BLE_THREAD_STACK_SIZE 1536
+#define BLE_THREAD_STACK_SIZE 2048
 #define BLE_THREAD_PRIORITY   7
 
 /*
@@ -49,6 +50,21 @@ static struct bt_uuid_128 umbra_intervals_uuid = BT_UUID_INIT_128(UMBRA_UUID_VAL
 
 static struct bt_uuid_128 umbra_time_uuid = BT_UUID_INIT_128(UMBRA_UUID_VAL(5));
 static struct bt_uuid_128 umbra_quiet_uuid = BT_UUID_INIT_128(UMBRA_UUID_VAL(6));
+static struct bt_uuid_128 umbra_log_control_uuid = BT_UUID_INIT_128(UMBRA_UUID_VAL(7));
+static struct bt_uuid_128 umbra_log_data_uuid = BT_UUID_INIT_128(UMBRA_UUID_VAL(8));
+
+#define LOG_CONTROL_LEN    12
+#define LOG_FORMAT_VERSION 1
+/* With a 247-byte MTU, 15 records (240 bytes) go in one notification. */
+#define LOG_RECORDS_PER_NOTIFY_MAX 15
+/*
+ * During a log transfer ask for a 15-30 ms connection interval, then the usual
+ * 200-400 ms (prj.conf). The phone may refuse either; the transfer still works.
+ */
+#define LOG_FAST_PARAM BT_LE_CONN_PARAM(12, 24, 0, 400)
+#define LOG_SLOW_PARAM                                                                             \
+	BT_LE_CONN_PARAM(CONFIG_BT_PERIPHERAL_PREF_MIN_INT, CONFIG_BT_PERIPHERAL_PREF_MAX_INT,     \
+			 CONFIG_BT_PERIPHERAL_PREF_LATENCY, CONFIG_BT_PERIPHERAL_PREF_TIMEOUT)
 
 /* Intervals value: Daily then Night minutes, each uint16 little endian. */
 #define INTERVALS_LEN 4
@@ -85,6 +101,9 @@ static bool started;
 
 /* Wakes the BLE thread; these say why. */
 static K_SEM_DEFINE(ble_wake, 0, 1);
+/* A log transfer asked for by the app, and where it starts. */
+static atomic_t log_request_pending;
+static atomic_t log_request_from;
 static atomic_t restart_advertising;
 static atomic_t telemetry_pending;
 
@@ -311,6 +330,49 @@ static ssize_t write_haptic(struct bt_conn *conn, const struct bt_gatt_attr *att
 	return len;
 }
 
+/*
+ * Log control read: oldest seq uint32, next seq uint32 (records are oldest up
+ * to next - 1), capacity uint16, record length uint8, format version uint8.
+ */
+static ssize_t read_log_control(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
+				uint16_t len, uint16_t offset)
+{
+	uint32_t first;
+	uint32_t after_last;
+	uint8_t value[LOG_CONTROL_LEN];
+
+	data_log_range(&first, &after_last);
+	sys_put_le32(first, &value[0]);
+	sys_put_le32(after_last, &value[4]);
+	sys_put_le16(DATA_LOG_CAPACITY, &value[8]);
+	value[10] = DATA_LOG_RECORD_LEN;
+	value[11] = LOG_FORMAT_VERSION;
+
+	return bt_gatt_attr_read(conn, attr, buf, len, offset, value, sizeof(value));
+}
+
+/* Log control write: uint32 seq to send from (0 = oldest). The BLE thread sends. */
+static ssize_t write_log_control(struct bt_conn *conn, const struct bt_gatt_attr *attr,
+				 const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
+{
+	ARG_UNUSED(conn);
+	ARG_UNUSED(attr);
+	ARG_UNUSED(flags);
+
+	if (offset != 0) {
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+	}
+	if (len != sizeof(uint32_t)) {
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+	}
+
+	atomic_set(&log_request_from, (atomic_val_t)sys_get_le32(buf));
+	atomic_set(&log_request_pending, 1);
+	k_sem_give(&ble_wake);
+
+	return len;
+}
+
 BT_GATT_SERVICE_DEFINE(umbra_svc,
 	BT_GATT_PRIMARY_SERVICE(&umbra_service_uuid),
 	BT_GATT_CHARACTERISTIC(&umbra_steps_uuid.uuid, BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
@@ -331,11 +393,88 @@ BT_GATT_SERVICE_DEFINE(umbra_svc,
 	BT_GATT_CHARACTERISTIC(&umbra_quiet_uuid.uuid, BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE,
 			       BT_GATT_PERM_READ | BT_GATT_PERM_WRITE, read_quiet, write_quiet,
 			       NULL),
+	BT_GATT_CHARACTERISTIC(&umbra_log_control_uuid.uuid, BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE,
+			       BT_GATT_PERM_READ | BT_GATT_PERM_WRITE, read_log_control,
+			       write_log_control, NULL),
+	BT_GATT_CHARACTERISTIC(&umbra_log_data_uuid.uuid, BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_NONE,
+			       NULL, NULL, NULL),
+	BT_GATT_CCC(NULL, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 );
 
 /* Positions of the value attributes in umbra_svc, for notifying. */
-#define UMBRA_ATTR_STEPS 2
-#define UMBRA_ATTR_MODE  5
+#define UMBRA_ATTR_STEPS    2
+#define UMBRA_ATTR_MODE     5
+#define UMBRA_ATTR_LOG_DATA 18
+
+/*
+ * Send the log from seq from (0 = oldest) as notifications on Log data, as many
+ * whole records per notification as the MTU allows, then a 4-byte end marker:
+ * the seq after the last record sent. Asks for a fast connection interval
+ * meanwhile, and the slow one back after. Stops if the app disconnects,
+ * unsubscribes or asks for a new transfer.
+ */
+static void send_log(uint32_t from)
+{
+	const struct bt_gatt_attr *attr = &umbra_svc.attrs[UMBRA_ATTR_LOG_DATA];
+	uint8_t chunk[LOG_RECORDS_PER_NOTIFY_MAX * DATA_LOG_RECORD_LEN];
+	struct bt_conn *conn = NULL;
+	uint32_t first;
+	uint32_t after_last;
+	uint32_t sent = 0;
+	int err = 0;
+
+	k_mutex_lock(&state_lock, K_FOREVER);
+	if (current_conn != NULL) {
+		conn = bt_conn_ref(current_conn);
+	}
+	k_mutex_unlock(&state_lock);
+
+	if (conn == NULL) {
+		return;
+	}
+
+	data_log_range(&first, &after_last);
+	uint32_t seq = MAX(from, first);
+	size_t per_notify = (bt_gatt_get_mtu(conn) - 3) / DATA_LOG_RECORD_LEN;
+
+	per_notify = CLAMP(per_notify, 1, LOG_RECORDS_PER_NOTIFY_MAX);
+
+	printk("  BLE log: sending %u records from %u\n", after_last > seq ? after_last - seq : 0,
+	       seq);
+	(void)bt_conn_le_param_update(conn, LOG_FAST_PARAM);
+
+	while (seq < after_last && err == 0 && atomic_get(&log_request_pending) == 0) {
+		size_t n = 0;
+
+		while (n < per_notify && seq < after_last) {
+			struct data_log_record rec;
+
+			if (data_log_read(seq, &rec) == 0) {
+				data_log_encode(&rec, &chunk[n * DATA_LOG_RECORD_LEN]);
+				n++;
+			}
+			seq++;
+		}
+
+		if (n > 0) {
+			err = bt_gatt_notify(conn, attr, chunk, n * DATA_LOG_RECORD_LEN);
+			sent += n;
+		}
+	}
+
+	if (err == 0 && atomic_get(&log_request_pending) == 0) {
+		uint8_t end[sizeof(uint32_t)];
+
+		sys_put_le32(seq, end);
+		err = bt_gatt_notify(conn, attr, end, sizeof(end));
+	}
+
+	(void)bt_conn_le_param_update(conn, LOG_SLOW_PARAM);
+	bt_conn_unref(conn);
+
+	printk("  BLE log: %u records sent%s\n", sent, err ? ", stopped (not subscribed or link lost)"
+							   : "");
+}
 
 /* Set while advertising should run but failed to start; the BLE thread retries. */
 static bool advertising_failed;
@@ -549,6 +688,9 @@ static void ble_thread(void *p1, void *p2, void *p3)
 			adv_attempt_ms = k_uptime_get();
 			(void)start_advertising();
 		}
+		if (atomic_set(&log_request_pending, 0) != 0) {
+			send_log((uint32_t)atomic_get(&log_request_from));
+		}
 		if (atomic_set(&telemetry_pending, 0) != 0) {
 			struct ble_telemetry snapshot;
 
@@ -564,9 +706,27 @@ static void ble_thread(void *p1, void *p2, void *p3)
 K_THREAD_DEFINE(ble_thread_id, BLE_THREAD_STACK_SIZE, ble_thread, NULL, NULL, NULL,
 		BLE_THREAD_PRIORITY, 0, 0);
 
+/* The UMBRA_ATTR_* positions are counted by hand; check them against the table. */
+static int check_attr_positions(void)
+{
+	if (bt_uuid_cmp(umbra_svc.attrs[UMBRA_ATTR_STEPS].uuid, &umbra_steps_uuid.uuid) != 0 ||
+	    bt_uuid_cmp(umbra_svc.attrs[UMBRA_ATTR_MODE].uuid, &umbra_mode_uuid.uuid) != 0 ||
+	    bt_uuid_cmp(umbra_svc.attrs[UMBRA_ATTR_LOG_DATA].uuid, &umbra_log_data_uuid.uuid) != 0) {
+		LOG_ERR("Umbra service attribute positions are wrong; fix UMBRA_ATTR_*");
+		return -EFAULT;
+	}
+	return 0;
+}
+
 int ble_service_init(void)
 {
-	int err = bt_enable(NULL);
+	int err = check_attr_positions();
+
+	if (err) {
+		return err;
+	}
+
+	err = bt_enable(NULL);
 
 	if (err) {
 		return err;

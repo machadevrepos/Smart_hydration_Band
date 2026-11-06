@@ -23,4 +23,5 @@ target_sources(app PRIVATE
   src/watchdog.c
   src/storage.c
   src/wall_clock.c
+  src/data_log.c
 )

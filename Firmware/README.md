@@ -50,6 +50,7 @@ Firmware/
 │   ├── watchdog.h                    hardware watchdog API
 │   ├── storage.h                     flash storage API
 │   ├── wall_clock.h                  time of day API
+│   ├── data_log.h                    steps and heart-rate log API
 │   └── max30101.h                    sensor wrapper API
 ├── src/
 │   ├── main.c                        initialization and FIFO polling loop
@@ -64,7 +65,8 @@ Firmware/
 │   ├── battery.c                     battery voltage to percent
 │   ├── watchdog.c                    hardware watchdog, reset reason
 │   ├── storage.c                     settings and NVS in flash
-│   └── wall_clock.c                  time of day from the app
+│   ├── wall_clock.c                  time of day from the app
+│   └── data_log.c                    steps and heart-rate log in flash
 └── prj.conf
 ```
 
@@ -229,9 +231,32 @@ the phone may choose differently.
 | | Intervals | `1ab10004-...` | Read, write | Daily then Night minutes, uint16 LE each, 1-240, 0 = default. Kept in flash |
 | | Time | `1ab10005-...` | Read, write | UTC seconds uint32 LE, then local offset from UTC in minutes int16 LE. Write on every connection. Reads 0 UTC if not set |
 | | Quiet hours | `1ab10006-...` | Read, write | Start then end, local minutes after midnight, uint16 LE each, 0-1439. Equal = off. Default 1380, 420. Kept in flash |
+| | Log control | `1ab10007-...` | Read, write | Read: oldest seq, next seq (uint32 LE each), capacity uint16, record length uint8, format version uint8. Write: uint32 seq to send from, 0 = oldest |
+| | Log data | `1ab10008-...` | Notify | Log records, 16 bytes each, several per notification, then a 4-byte end marker |
 
 An app should subscribe, then read Battery, Steps and Mode once for their current
 values. The Umbra characteristic UUIDs share the service UUID's other digits.
+The full interface for the app developer, with the connection sequence, is in
+[`BLE_INTERFACE.md`](BLE_INTERFACE.md).
+
+**Data log.** Steps and heart rate are logged to flash all the time, whether or
+not an app is connected, so nothing is lost while it is away. One 16-byte record
+covers 5 min in Daily Mode and 1 min in Night Mode (a mode change closes the
+period early): start time, steps, mean and peak heart rate, mode. The ring holds
+1024 records, about 3.5 days of Daily use or 17 hours of Night use, and then
+overwrites the oldest. Records carry a sequence number that only grows, so on
+each connection the app writes the number after the last one it has to Log
+control, receives the newer records on Log data, then the end marker. Records
+made before the app set the time after a power-on are sent with UTC time if they
+are from the current boot, otherwise with seconds since their boot (flag bit 0
+clear). The period in progress is written before a low-battery switch-off; a
+reset loses at most that period. Writes run on their own low-priority thread,
+since an NVS sector erase can take longer than the sensor FIFO lasts. During a
+transfer the band asks for a 15-30 ms connection interval, then 200-400 ms again.
+
+Changing the flash layout moves the settings partition, so the first flash of
+this version should erase the chip (`west flash --erase`); stored intervals and
+quiet hours then start from their defaults.
 
 The battery percentage uses a typical LiPo curve and has not been calibrated.
 Battery is measured and printed every 10 s, and a reading taken while the motor runs may
@@ -385,5 +410,5 @@ Implemented: heart rate from IR at 1 Hz, BMI270 step counting, Daily and Night
 modes with the LED, button and haptic reminders, BLE services and haptic command,
 battery level, RTT output.
 
-Not implemented yet: SpO2, skin temperature, flash logging, motion-artifact
+Not implemented yet: SpO2, skin temperature, motion-artifact
 handling for heart rate, power management.
