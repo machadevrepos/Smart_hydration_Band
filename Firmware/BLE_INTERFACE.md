@@ -1,6 +1,6 @@
 # Umbra band: BLE interface for the app
 
-This is the contract between the band's firmware (version 1.0.0 and later) and
+This is the contract between the band's firmware (version 1.1.0 and later) and
 the phone app. It lists every Bluetooth service and characteristic the band
 exposes, the exact byte layout of each value, what the band does when the app
 writes one, and the order the app should do things in on each connection.
@@ -46,10 +46,11 @@ first group changed: `1ab1000N-fde9-42a3-ab5b-82416f9bca6e`.
 | 8 | Time | `1ab10005-…` | Read, Write | 6 bytes |
 | 9 | Quiet hours | `1ab10006-…` | Read, Write | 4 bytes |
 | 10 | Log control | `1ab10007-…` | Read, Write | read 12, write 4 bytes |
-| 11 | Log data | `1ab10008-…` | Notify | 4 or a multiple of 16 bytes |
+| 11 | Log data | `1ab10008-…` | Notify | 4 or a multiple of 20 bytes |
+| 12 | SpO2 | `1ab10009-…` | Read, Write, Notify | read 10, write 1 byte |
 | | **Nordic UART service** `6e400001-b5a3-f393-e0a9-e50e24dcca9e` | | | |
-| 12 | RX (app to band) | `6e400002-…` | Write | text |
-| 13 | TX (band to app) | `6e400003-…` | Notify | text lines |
+| 13 | RX (app to band) | `6e400002-…` | Write | text |
+| 14 | TX (band to app) | `6e400003-…` | Notify | text lines |
 
 A write with the wrong length is rejected with ATT error `0x0D` (Invalid
 Attribute Value Length). A write with a value out of range is rejected with
@@ -178,19 +179,20 @@ See section 3 for how to use them.
 | 0-3 | uint32 | Oldest sequence number still stored |
 | 4-7 | uint32 | Next sequence number (records are oldest up to next - 1; equal means empty) |
 | 8-9 | uint16 | Capacity in records (1024) |
-| 10 | uint8 | Record length in bytes (16) |
-| 11 | uint8 | Format version (1) |
+| 10 | uint8 | Record length in bytes (20) |
+| 11 | uint8 | Format version (2) |
 
 **Write Log control** (4 bytes): uint32, the first sequence number to send. `0`
 means "from the oldest".
 
 **Log data notifications** come in two kinds, told apart by length:
 
-- **A multiple of 16 bytes:** one or more records, in sequence order.
+- **A multiple of 20 bytes:** one or more records, in sequence order. Use the
+  record length read from Log control rather than a fixed 20.
 - **Exactly 4 bytes:** the end marker. A uint32: the sequence number to ask for
   next time. No more records follow.
 
-**Record layout** (16 bytes):
+**Record layout** (20 bytes, format version 2):
 
 | Bytes | Type | Field | Meaning |
 | --- | --- | --- | --- |
@@ -202,21 +204,65 @@ means "from the oldest".
 | 13 | uint8 | hr_max | Highest heart rate in bpm. `0` = no reading. |
 | 14 | uint8 | duration | Length of the period in tens of seconds (`30` = 5 min, `6` = 1 min). |
 | 15 | uint8 | flags | Bit 0: time is UTC. Bit 1: Night Mode. Bit 2: steps valid. Others: 0. |
+| 16 | uint8 | spo2 | SpO2 in % measured during the period. `0` = no reading in the period. |
+| 17 | uint8 | spo2_quality | Quality of that SpO2 reading, 0-100. |
+| 18-19 | uint16 | reserved | 0. |
 
-Example: `D2 04 00 00 40 C1 ED 6A 38 01 07 00 52 61 1E 05` is record 1234, starting
-2026-11-06 12:00:00 UTC, 312 steps, boot 7, mean 82 bpm, peak 97 bpm, 5 minutes,
-Daily Mode, time UTC, steps valid.
+Example: `D2 04 00 00 40 C1 ED 6A 38 01 07 00 52 61 1E 05 61 55 00 00` is record
+1234, starting 2026-11-06 12:00:00 UTC, 312 steps, boot 7, mean 82 bpm, peak 97
+bpm, 5 minutes, Daily Mode, time UTC, steps valid, SpO2 97% with quality 85.
 
-### 2.11 Nordic UART (legacy)
+Format version 1 (firmware 1.0.0) had 16-byte records without the SpO2 bytes.
+
+### 2.11 SpO2 (`1ab10009`)
+
+SpO2 is measured in **spot checks**, the way wrist devices do it: about 35 seconds
+with the wrist still, every 30 minutes while the band is worn, 5 minutes after an
+attempt that failed, and whenever the app asks. It is a wellness estimate, not a
+medical reading.
+
+**Read / Notify** (10 bytes):
+
+| Bytes | Type | Meaning |
+| --- | --- | --- |
+| 0 | uint8 | Status of the latest attempt (table below) |
+| 1 | uint8 | Last valid SpO2 in %, `0` if there has been none since power-on |
+| 2 | uint8 | Quality of that reading, 0-100 |
+| 3 | uint8 | Reserved, 0 |
+| 4-7 | uint32 | When that reading was taken, Unix time UTC; `0` if the time was not set |
+| 8-9 | uint16 | Latest attempt's ratio R x 1000 (for calibration; the app can ignore it) |
+
+| Status | Meaning |
+| --- | --- |
+| `0` | No measurement yet |
+| `1` | OK: byte 1 is a fresh reading |
+| `2` | Measuring now (about 35 s) |
+| `3` | Not on the skin |
+| `4` | Too much movement: ask the user to keep still |
+| `5` | Pulse too weak |
+| `6` | Unstable signal |
+| `7` | Sensor unavailable |
+
+A failed attempt keeps the last valid reading in bytes 1-7, so the app can still
+show it with its age. Notified whenever any byte changes, including when a
+measurement starts (status 2) and when it ends.
+
+**Write** `1` to measure now. Use this for a "measure SpO2" button: tell the user to
+keep still, show "measuring" while the status is 2, then the result or the reason
+it failed. A request while a measurement is running is ignored.
+
+### 2.12 Nordic UART (legacy)
 
 Kept for the current app; it can be dropped once the app uses the services above.
 
 - **TX** sends one JSON line per second once the app subscribes, ending in `\n`.
   A line can arrive split over several notifications; join them up to the `\n`.
-  Example: `{"session_active":false,"heart_rate":84,"steps":120,"battery":78}`.
+  Example: `{"session_active":false,"heart_rate":84,"steps":120,"battery":78,"spo2":97}`.
   - `session_active`: `true` in Night Mode.
   - `heart_rate`: always present. **`0` means no reading right now. Show "no
     reading", never "0 bpm", and do not keep showing the old value.**
+  - `spo2`: always present. The last SpO2 reading while it is recent (up to 35
+    minutes old), `0` when there is none. Show `0` as "no reading".
   - `steps` and `battery` are left out if the band cannot measure them.
 - **RX** accepts the text `trigger_haptic`, which works like writing `1` to Haptic.
 
@@ -224,11 +270,12 @@ Kept for the current app; it can be dropped once the app uses the services above
 
 1. **Connect** to the band (scan for the name `Umbra`). Let the phone negotiate
    the largest MTU; iOS does this by itself (185 bytes or more). A bigger MTU
-   makes the log transfer about 15 times faster.
+   makes the log transfer about 12 times faster.
 2. **Discover** the services above.
 3. **Write Time** (section 2.8).
-4. **Subscribe** to Heart Rate Measurement, Battery Level, Steps, Mode and Log data.
-5. **Read** Mode, Intervals, Quiet hours, Battery Level, Steps and Firmware Revision
+4. **Subscribe** to Heart Rate Measurement, Battery Level, Steps, Mode, SpO2 and
+   Log data.
+5. **Read** Mode, Intervals, Quiet hours, Battery Level, Steps, SpO2 and Firmware Revision
    once, for their current values. After that the notifications keep them current.
 6. **Sync the log:**
    1. Take the "next sequence number" the app saved after the last sync (0 the
@@ -241,8 +288,9 @@ Kept for the current app; it can be dropped once the app uses the services above
    5. If the connection drops before the end marker arrives, nothing is lost: the
       next sync starts from the saved number again.
 7. **Live:** show heart rate from its notifications (section 2.1), battery, steps
-   and mode. The mode selector writes Mode, the interval picker writes Intervals,
-   the "buzz" button writes Haptic.
+   mode and the last SpO2 with its time. The mode selector writes Mode, the
+   interval picker writes Intervals, the "buzz" button writes Haptic, and a
+   "measure SpO2" button writes `1` to SpO2.
 
 When the app's saved number is older than the oldest record still stored (the
 band was away long enough to wrap its 1024-record ring), the transfer simply
@@ -260,6 +308,8 @@ only more slowly. 1024 records take a few seconds at a large MTU.
 - **Daily steps:** add up `steps` (when flag bit 2 is set) over the records of the
   day, using each record's local date.
 - **Heart rate over time:** plot `hr_avg` (and `hr_max`) per record, skipping zeros.
+- **SpO2 over time:** records with a non-zero `spo2`, about one every 30 minutes
+  while the band is worn.
 - **Night sessions:** consecutive records with flag bit 1 set.
 - **Records without UTC time (flag bit 0 clear):** these were made after a power-on
   while no phone had set the time, and the band was switched off again before a
@@ -309,6 +359,7 @@ Uint8List encodeLogRequest(int fromSeq) {
 final modeDaily = Uint8List.fromList([0]);
 final modeNight = Uint8List.fromList([1]);
 final buzz = Uint8List.fromList([1]);
+final measureSpo2 = Uint8List.fromList([1]);
 ```
 
 Decoding Log data notifications:
@@ -316,22 +367,24 @@ Decoding Log data notifications:
 ```dart
 class LogRecord {
   LogRecord(this.seq, this.time, this.steps, this.boot, this.hrAvg, this.hrMax,
-      this.durationS, this.flags);
-  final int seq, time, steps, boot, hrAvg, hrMax, durationS, flags;
+      this.durationS, this.flags, this.spo2, this.spo2Quality);
+  final int seq, time, steps, boot, hrAvg, hrMax, durationS, flags, spo2, spo2Quality;
   bool get timeIsUtc => flags & 0x01 != 0;
   bool get night => flags & 0x02 != 0;
   bool get stepsValid => flags & 0x04 != 0;
 }
 
+/// [recordLen] is byte 10 of Log control (20 in format version 2).
 /// Returns the records, or null with [endNextSeq] set for the end marker.
-List<LogRecord>? decodeLogData(List<int> value, void Function(int) endNextSeq) {
+List<LogRecord>? decodeLogData(
+    List<int> value, int recordLen, void Function(int) endNextSeq) {
   final b = ByteData.sublistView(Uint8List.fromList(value));
   if (value.length == 4) {
     endNextSeq(b.getUint32(0, Endian.little));
     return null;
   }
   final records = <LogRecord>[];
-  for (var o = 0; o + 16 <= value.length; o += 16) {
+  for (var o = 0; o + recordLen <= value.length; o += recordLen) {
     records.add(LogRecord(
       b.getUint32(o, Endian.little),
       b.getUint32(o + 4, Endian.little),
@@ -341,6 +394,8 @@ List<LogRecord>? decodeLogData(List<int> value, void Function(int) endNextSeq) {
       b.getUint8(o + 13),
       b.getUint8(o + 14) * 10,
       b.getUint8(o + 15),
+      recordLen >= 20 ? b.getUint8(o + 16) : 0,
+      recordLen >= 20 ? b.getUint8(o + 17) : 0,
     ));
   }
   return records;
@@ -362,7 +417,9 @@ nothing to the band. To use this interface:
 5. **History:** sync the log on every connection (section 3, step 6) and keep the
    records in the app's own storage.
 6. **Buzz / demo button:** write `1` to Haptic (or send `trigger_haptic` on UART).
-7. **Optional:** a quiet hours setting (section 2.9), and the firmware version on
+7. **SpO2:** show the last reading and its time from the SpO2 characteristic, a
+   "measure now" button (section 2.11), and SpO2 in the history (record byte 16).
+8. **Optional:** a quiet hours setting (section 2.9), and the firmware version on
    a band screen (section 2.3).
 
 ## 7. Behavior summary
@@ -371,6 +428,7 @@ nothing to the band. To use this interface:
 | --- | --- |
 | No app ever connected | Daily Mode, white LED, double tap every 90 min. Button switches to Night (green, every 35 min) and back. No quiet hours (no time). Log keeps recording. |
 | App connected | The same, plus live data and app control. |
+| Worn | SpO2 spot check every 30 min (about 35 s, keep still); the red LED is lit only then. |
 | App disconnects | Keeps going on its own, keeps logging, advertises again. |
 | Band reset by its watchdog | Comes back within ~10 s in the same mode, same reminder schedule, same time. |
 | Battery under ~5% | Saves the log, switches off (LED dark). Charge, then press the button. |

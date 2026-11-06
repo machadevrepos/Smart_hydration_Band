@@ -51,6 +51,7 @@ Firmware/
 │   ├── storage.h                     flash storage API
 │   ├── wall_clock.h                  time of day API
 │   ├── data_log.h                    steps and heart-rate log API
+│   ├── spo2.h                        SpO2 spot check API
 │   └── max30101.h                    sensor wrapper API
 ├── src/
 │   ├── main.c                        initialization and FIFO polling loop
@@ -66,7 +67,8 @@ Firmware/
 │   ├── watchdog.c                    hardware watchdog, reset reason
 │   ├── storage.c                     settings and NVS in flash
 │   ├── wall_clock.c                  time of day from the app
-│   └── data_log.c                    steps and heart-rate log in flash
+│   ├── data_log.c                    steps and heart-rate log in flash
+│   └── spo2.c                        SpO2 spot checks
 └── prj.conf
 ```
 
@@ -101,7 +103,7 @@ Skin contact is detected from the raw IR level (`APP_CONTACT_IR_MIN` in
 line per second while the sensor is on the skin:
 
 ```text
-Smart Hydration Band, firmware 1.0.0
+Smart Hydration Band, firmware 1.1.0
 
   time    heart rate    steps   status
   -----   ----------   ------   ----------------------------
@@ -232,7 +234,8 @@ the phone may choose differently.
 | | Time | `1ab10005-...` | Read, write | UTC seconds uint32 LE, then local offset from UTC in minutes int16 LE. Write on every connection. Reads 0 UTC if not set |
 | | Quiet hours | `1ab10006-...` | Read, write | Start then end, local minutes after midnight, uint16 LE each, 0-1439. Equal = off. Default 1380, 420. Kept in flash |
 | | Log control | `1ab10007-...` | Read, write | Read: oldest seq, next seq (uint32 LE each), capacity uint16, record length uint8, format version uint8. Write: uint32 seq to send from, 0 = oldest |
-| | Log data | `1ab10008-...` | Notify | Log records, 16 bytes each, several per notification, then a 4-byte end marker |
+| | Log data | `1ab10008-...` | Notify | Log records, 20 bytes each (format version 2), several per notification, then a 4-byte end marker |
+| | SpO2 | `1ab10009-...` | Read, write, notify | Status, last valid SpO2 % and its quality, its UTC time, latest R x 1000 (10 bytes). Write 1 to measure now |
 
 An app should subscribe, then read Battery, Steps and Mode once for their current
 values. The Umbra characteristic UUIDs share the service UUID's other digits.
@@ -240,9 +243,10 @@ The full interface for the app developer, with the connection sequence, is in
 [`BLE_INTERFACE.md`](BLE_INTERFACE.md).
 
 **Data log.** Steps and heart rate are logged to flash all the time, whether or
-not an app is connected, so nothing is lost while it is away. One 16-byte record
+not an app is connected, so nothing is lost while it is away. One 20-byte record
 covers 5 min in Daily Mode and 1 min in Night Mode (a mode change closes the
-period early): start time, steps, mean and peak heart rate, mode. The ring holds
+period early): start time, steps, mean and peak heart rate, mode, and the SpO2
+reading taken in that period, if any. The ring holds
 1024 records, about 3.5 days of Daily use or 17 hours of Night use, and then
 overwrites the oldest. Records carry a sequence number that only grows, so on
 each connection the app writes the number after the last one it has to Log
@@ -254,9 +258,10 @@ reset loses at most that period. Writes run on their own low-priority thread,
 since an NVS sector erase can take longer than the sensor FIFO lasts. During a
 transfer the band asks for a 15-30 ms connection interval, then 200-400 ms again.
 
-Changing the flash layout moves the settings partition, so the first flash of
-this version should erase the chip (`west flash --erase`); stored intervals and
-quiet hours then start from their defaults.
+Changing the flash layout moves the settings partition, so the first flash of a
+version that changes it (1.0.0, then 1.1.0 for the larger SpO2 records) should
+erase the chip (`west flash --erase`); stored intervals, quiet hours and the log
+then start from scratch.
 
 The battery percentage uses a typical LiPo curve and has not been calibrated.
 Battery is measured and printed every 10 s, and a reading taken while the motor runs may
@@ -292,6 +297,65 @@ Anyone nearby can connect, since the client's requirement is no pairing, so they
 could also trigger a buzz. Haptic commands less than 2 s after the last one are
 ignored (and logged), so an app cannot buzz the band nonstop. The GATT write
 still succeeds, so the app sees no error.
+
+## SpO2
+
+SpO2 is measured in spot checks by `src/spo2.c`, the way wrist devices do it, since
+continuous SpO2 at the wrist breaks down with any movement. It is a wellness
+estimate, not a medical reading.
+
+**When.** About 2 min after power-up, then every 30 min while the band is worn
+(the client's sampling plan), 5 min after a failed attempt, and when the app
+writes `1` to the SpO2 characteristic. A scheduled check waits for skin contact
+and a heart-rate lock. The intervals are in `include/app_config.h`.
+
+**How, about 35 s.** The red LED (off otherwise) is turned on and its current
+adjusted so the red level sits near 120000 counts. After 2 s for the filters to
+settle, seven 4 s windows are measured. In each, DC is the mean and AC the RMS
+after the same 0.9-3 Hz band-pass as heart rate, and
+
+    R = (red AC / red DC) / (IR AC / IR DC)
+
+A window is rejected for more than 100 mg of movement on any axis (BMI270), a DC
+level outside 20000-250000, a perfusion index (AC/DC) under 30 ppm on either
+channel, or red and IR pulses that correlate under 0.80. With at least four good
+windows that agree within 10% of their median R, SpO2 = A - B x R, limited to
+70-100%, with a quality score (good windows x mean correlation). Otherwise no
+value is reported, and the result line gives the reason (movement, weak pulse,
+unstable signal, off the wrist).
+
+RTT shows one line per window and the result:
+
+```text
+  SpO2: measuring, keep still, red LED 19.2 mA (red level 118250, IR level 171840)
+  SpO2 window 1: R 0.524, PI red 61 ppm, IR 104 ppm, corr 93%, move 12 mg, DC red 118391 IR 171902, good
+  ...
+  14:05   SpO2 97% (quality 85, R 0.521)
+```
+
+**The wrist signal is the main risk.** The IR wrist pulse on this board is small
+(about 100 ppm of DC), and red is usually weaker. The first thing to check on the
+board is the per-window `PI red` and `corr`: if most windows are rejected as weak
+at rest, the optics (LED current, band fit, light shielding) limit SpO2 before the
+algorithm does. The thresholds are at the top of `src/spo2.c`.
+
+### SpO2 calibration
+
+`A` and `B` in `include/app_config.h` are the textbook 110 and 25, **not**
+calibrated for this board, enclosure and LED wavelengths; until they are, the
+readings can be several percent off. To calibrate:
+
+1. Fix the MAX30101 VDD supply first (see Hardware caveats); calibration data
+   taken with the sensor out of specification would have to be redone.
+2. Wear the band and a fingertip pulse oximeter on the same arm, seated, still.
+3. Ask for a measurement (write `1` to SpO2, or wait for the scheduled one) and
+   note the R from the result line and the oximeter's reading.
+4. Repeat for 5-10 people, a few sessions each, for 20 or more good pairs.
+5. Fit SpO2 = A - B x R by least squares and put A and B in `app_config.h`.
+
+Healthy people read 95-99%, so this calibrates the normal range well. Proving
+accuracy at low saturations needs a clinical desaturation study, which is out of
+scope.
 
 ## Heart-rate algorithm
 
@@ -407,9 +471,10 @@ heart rate is lost.
 
 ## Scope
 
-Implemented: heart rate from IR at 1 Hz, BMI270 step counting, Daily and Night
-modes with the LED, button and haptic reminders, BLE services and haptic command,
-battery level, RTT output.
+Implemented: heart rate from IR at 1 Hz, SpO2 spot checks (uncalibrated),
+BMI270 step counting, Daily and Night modes with the LED, button and haptic
+reminders, app control of mode, intervals and quiet hours, the flash data log
+with sync, BLE services and haptic command, battery level, RTT output.
 
-Not implemented yet: SpO2, skin temperature, motion-artifact
+Not implemented yet: SpO2 calibration, skin temperature, motion-artifact
 handling for heart rate, power management.
