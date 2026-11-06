@@ -51,8 +51,12 @@ LOG_MODULE_REGISTER(spo2, LOG_LEVEL_INF);
 #define MIN_CORRELATION 0.80f   /* Red and IR pulses must move together. */
 #define MIN_PERFUSION   0.00003f /* AC/DC, 30 ppm. */
 #define MAX_MOTION_MG   100     /* Largest swing on any axis within a window. */
-/* Good windows must agree with their median R to within this share. */
-#define AGREE_FRACTION  0.10f
+/*
+ * At least MIN_GOOD_WINDOWS good windows must lie within this share of their
+ * median R. 10% rejected a seated wrist recording whose seven windows were all
+ * good (R 0.36-0.53, median 0.44); 20% keeps six of them.
+ */
+#define AGREE_FRACTION  0.20f
 
 #define SPO2_MIN_PERCENT 70
 #define SPO2_MAX_PERCENT 100
@@ -360,6 +364,7 @@ static void conclude(void)
 		sorted[i] = window_ratio[i];
 	}
 	float r = median(sorted, good_windows);
+	float spread = r > 0.0f ? (sorted[good_windows - 1] - sorted[0]) / r : 0.0f;
 	int agree = 0;
 	float corr_sum = 0.0f;
 
@@ -370,12 +375,16 @@ static void conclude(void)
 		corr_sum += window_corr[i];
 	}
 
+	/* The whole measurement on one line, for calibration notes. */
+	printk("  SpO2 summary: %d of %d windows good, %d agree, median R %d.%03d, spread %d%%\n",
+	       good_windows, WINDOW_COUNT, agree, (int)r, (int)(r * 1000.0f) % 1000,
+	       (int)(spread * 100.0f + 0.5f));
+
 	if (agree < MIN_GOOD_WINDOWS) {
 		finish(SPO2_STATUS_UNSTABLE, r, 0.0f);
 		return;
 	}
 
-	last_good_pa = red_pa;
 	finish(SPO2_STATUS_OK, r, corr_sum / good_windows);
 }
 
@@ -425,6 +434,8 @@ static void agc_done(void)
 		}
 	}
 
+	/* Start the next measurement here, so it skips most of this adjustment. */
+	last_good_pa = red_pa;
 	print_red_current("measuring, keep still", dc_red, dc_ir);
 	state = STATE_SETTLE;
 	sample_count = 0;
