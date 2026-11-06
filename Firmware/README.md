@@ -139,6 +139,10 @@ The band works with no app or pairing:
 | Daily, at power-up | White | Double tap every 90 min |
 | Night | Green | Double tap every 35 min |
 
+The reminders, LED, button and BLE do not depend on the sensors. If the
+MAX30101 does not start at power-up, the error is logged, the status line shows
+`heart-rate sensor unavailable`, no heart rate is sent, and everything else runs.
+
 A button press switches mode, gives one buzz and restarts the interval. Each
 press and reminder prints a line over RTT. Intervals are the two values at the top of
 `include/app_config.h`, in seconds, with the motor timings just below them.

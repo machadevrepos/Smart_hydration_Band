@@ -73,6 +73,8 @@ static bool contact_update(struct contact *c, int32_t ir)
 
 /* What the status line shows, refreshed from the estimator once a second. */
 struct hr_status {
+	/* False if the MAX30101 did not start: no heart rate, the rest runs. */
+	bool sensor_ok;
 	int64_t contact_since_ms;
 	bool have_estimate;
 	struct hr_estimate hr;
@@ -184,7 +186,9 @@ static void format_rate(const struct contact *contact, const struct hr_status *s
 
 	snprintk(rate_text, sizeof(rate_text), "--");
 
-	if (!contact->on) {
+	if (!st->sensor_ok) {
+		snprintk(status_text, sizeof(status_text), "heart-rate sensor unavailable");
+	} else if (!contact->on) {
 		snprintk(status_text, sizeof(status_text), "no skin contact");
 	} else if (!st->have_estimate) {
 		int waited = (int)((now - st->contact_since_ms) / 1000);
@@ -300,13 +304,16 @@ int main(void)
 	int64_t next_battery_ms = 0;
 	int ret;
 
+	/*
+	 * Each of these is optional: the rest of the band runs if one fails.
+	 * Above all, the reminders must keep firing without any sensor.
+	 */
 	ret = max30101_init();
+	status.sensor_ok = ret == 0;
 	if (ret < 0) {
-		LOG_ERR("MAX30101 initialization failed (%d)", ret);
-		return ret;
+		LOG_ERR("MAX30101 unavailable, no heart rate (%d)", ret);
 	}
 
-	/* Each of these is optional: the rest of the band runs if one fails. */
 	ret = haptic_init();
 	if (ret < 0) {
 		LOG_ERR("Haptic motor unavailable (%d)", ret);
@@ -340,7 +347,7 @@ int main(void)
 	}
 
 	/* Loading the BMI270 outlasts the FIFO, so start from an empty one. */
-	{
+	if (status.sensor_ok) {
 		bool ignored;
 
 		(void)max30101_read_fifo(ir, ARRAY_SIZE(ir), &ignored);
@@ -362,7 +369,7 @@ int main(void)
 
 	for (;;) {
 		bool lost = false;
-		int count = max30101_read_fifo(ir, ARRAY_SIZE(ir), &lost);
+		int count = status.sensor_ok ? max30101_read_fifo(ir, ARRAY_SIZE(ir), &lost) : 0;
 
 		if (count < 0) {
 			LOG_WRN("MAX30101 read failed (%d)", count);
@@ -381,7 +388,7 @@ int main(void)
 			status.have_estimate = false;
 			status.contact_since_ms = k_uptime_get();
 			rate_meter_restart(&rate);
-		} else {
+		} else if (status.sensor_ok) {
 			rate_meter_update(&rate, count);
 		}
 
