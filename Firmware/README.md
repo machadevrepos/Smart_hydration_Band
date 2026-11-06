@@ -297,14 +297,28 @@ green, so the next PCB revision should feed VLED+ (pins 9-10) from a 5 V boost
 converter (sized for LED pulses up to 50 mA, with local bulk capacitance).
 Until then heart rate comes from IR.
 
-**Sensor VDD.**
+**Sensor VDD: delivery blocker until checked on the unit.**
 
 The MAX30101 has a 1.8 V analog supply (`VDD`, pin 11; 1.7-2.0 V, absolute
 maximum 2.2 V) and a separate 3.1-5.0 V LED supply (`VLED+`, pins 9-10). The
-KiCad netlist in `PCB/kicad_project` ties pin 11 to `+3.3V` together with pins
-9-10. That exceeds the VDD absolute maximum. Before powering the board with the
-sensor fitted, verify the netlist and, if needed, add a 1.8 V regulator for VDD
-with a 1 uF bypass capacitor.
+KiCad schematic in `PCB/kicad_project` ties pin 11 to `+3.3V` together with pins
+9-10, and its only regulator is the AP2112K-3.3: there is no 1.8 V rail. A
+sensor run at 3.3 V on VDD is 1.1 V over its absolute maximum. It may work on the
+bench and then drift or fail in use, and firmware cannot detect or correct it.
+
+Before a unit ships:
+
+1. Power the band from its battery, sensor fitted.
+2. Measure pin 11 of the MAX30101 (or its VDD bypass capacitor) to GND.
+3. 1.7-2.0 V: the unit is reworked and fine. Around 3.3 V: rework it first with
+   a 1.8 V LDO (for example the AP2112K-1.8 or TLV70018, input from +3.3 V)
+   feeding pin 11 only, with a 1 uF bypass capacitor at the pin, and VLED+ left
+   on +3.3 V. Then repeat the check. A sensor that has already run at 3.3 V
+   should be replaced.
+4. Update the schematic and PCB so later units do not need the rework.
+
+The firmware keeps the reminders running if the sensor fails (see Modes), but
+heart rate is lost.
 
 ## Scope
 
