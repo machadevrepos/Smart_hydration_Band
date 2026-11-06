@@ -14,6 +14,7 @@
 #include "status_led.h"
 #include "step_counter.h"
 #include "storage.h"
+#include "wall_clock.h"
 #include "watchdog.h"
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
@@ -162,9 +163,22 @@ static void print_mode_events(uint32_t events)
 		       secs % 60, iv.daily_min, iv.night_min,
 		       (events & BAND_EVENT_SAVE_FAILED) ? ", NOT SAVED to flash" : ", saved");
 	}
+	if (events & BAND_EVENT_QUIET_HOURS) {
+		struct band_quiet_hours q;
+
+		band_mode_get_quiet_hours(&q);
+		printk("  %02u:%02u   app: quiet hours %02u:%02u-%02u:%02u%s%s\n", secs / 60,
+		       secs % 60, q.start_min / 60, q.start_min % 60, q.end_min / 60,
+		       q.end_min % 60, q.start_min == q.end_min ? " (off)" : "",
+		       (events & BAND_EVENT_SAVE_FAILED) ? ", NOT SAVED to flash" : ", saved");
+	}
 	if (events & BAND_EVENT_REMINDER) {
 		printk("  %02u:%02u   reminder: double tap (%s Mode)\n", secs / 60, secs % 60,
 		       band_mode_name(mode));
+	}
+	if (events & BAND_EVENT_QUIET_SKIPPED) {
+		printk("  %02u:%02u   reminder skipped: quiet hours (Daily Mode)\n", secs / 60,
+		       secs % 60);
 	}
 
 	printk("  %02u:%02u   next reminder in %u:%02u\n", secs / 60, secs % 60, next_s / 60,
@@ -474,6 +488,7 @@ int main(void)
 	int64_t next_battery_ms = 0;
 	int wdt_ret;
 	bool mode_restored;
+	bool clock_known;
 	int ret;
 
 	/* First, so a hang anywhere from here on resets the band. */
@@ -493,6 +508,9 @@ int main(void)
 	if (ret < 0) {
 		LOG_ERR("Haptic motor unavailable (%d)", ret);
 	}
+
+	/* The time of day, kept through a watchdog reset; needed for quiet hours. */
+	clock_known = wall_clock_init(watchdog_reset_kept_ram());
 
 	/* Before band_mode_init(), which loads the app's intervals from it. */
 	ret = storage_init();
@@ -538,6 +556,8 @@ int main(void)
 	print_header();
 
 	printk("  last reset: %s\n", watchdog_reset_cause());
+	printk("  time of day: %s\n", clock_known ? "kept through the reset"
+						 : "not set, no quiet hours until the app sets it");
 	if (wdt_ret < 0) {
 		LOG_ERR("Watchdog unavailable, a hang will not reset the band (%d)", wdt_ret);
 	}
@@ -581,6 +601,7 @@ int main(void)
 			publish_telemetry(&contact, &status);
 		}
 
+		wall_clock_keep();
 		watchdog_feed();
 		k_sleep(K_MSEC(APP_POLL_INTERVAL_MS));
 	}

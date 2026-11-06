@@ -10,6 +10,7 @@
 #include "haptic.h"
 #include "status_led.h"
 #include "storage.h"
+#include "wall_clock.h"
 
 LOG_MODULE_REGISTER(band_mode, LOG_LEVEL_INF);
 
@@ -19,7 +20,11 @@ BUILD_ASSERT(APP_DAILY_REMINDER_MIN >= BAND_INTERVAL_MIN &&
 		     APP_NIGHT_REMINDER_MIN <= BAND_INTERVAL_MAX,
 	     "Default reminder intervals must be in the accepted range");
 
+BUILD_ASSERT(APP_QUIET_START_MIN < BAND_MINUTES_PER_DAY && APP_QUIET_END_MIN < BAND_MINUTES_PER_DAY,
+	     "Default quiet hours must be minutes of the day");
+
 #define STORAGE_KEY_INTERVALS "intervals"
+#define STORAGE_KEY_QUIET     "quiet"
 
 /* Main loop only, apart from the locked interval fields below. */
 static enum band_mode mode;
@@ -33,6 +38,9 @@ static struct k_spinlock lock;
 static struct band_intervals intervals = {APP_DAILY_REMINDER_MIN, APP_NIGHT_REMINDER_MIN};
 static struct band_intervals requested_intervals;
 static bool intervals_pending;
+static struct band_quiet_hours quiet = {APP_QUIET_START_MIN, APP_QUIET_END_MIN};
+static struct band_quiet_hours requested_quiet;
+static bool quiet_pending;
 
 /* Mode asked for by the app, or -1. */
 static atomic_t requested_mode = ATOMIC_INIT(-1);
@@ -126,6 +134,55 @@ static void load_intervals(void)
 	}
 }
 
+static bool quiet_valid(const struct band_quiet_hours *q)
+{
+	return q->start_min < BAND_MINUTES_PER_DAY && q->end_min < BAND_MINUTES_PER_DAY;
+}
+
+static void load_quiet_hours(void)
+{
+	struct band_quiet_hours stored;
+	int ret = storage_load(STORAGE_KEY_QUIET, &stored, sizeof(stored));
+
+	if (ret == 0 && quiet_valid(&stored)) {
+		k_spinlock_key_t key = k_spin_lock(&lock);
+
+		quiet = stored;
+		k_spin_unlock(&lock, key);
+	} else if (ret != -ENOENT && ret != -ENODEV) {
+		LOG_WRN("Stored quiet hours unreadable (%d), using defaults", ret);
+	}
+}
+
+/* True if minute falls in [start, end), a window that may cross midnight. */
+static bool in_window(uint16_t minute, const struct band_quiet_hours *q)
+{
+	if (q->start_min == q->end_min) {
+		return false;
+	}
+	if (q->start_min < q->end_min) {
+		return minute >= q->start_min && minute < q->end_min;
+	}
+	return minute >= q->start_min || minute < q->end_min;
+}
+
+/* Quiet hours apply to Daily Mode only, and only once the app set the time. */
+static bool reminder_is_quiet(void)
+{
+	uint16_t minute;
+
+	if (mode != BAND_MODE_DAILY || !wall_clock_local_minute(&minute)) {
+		return false;
+	}
+
+	k_spinlock_key_t key = k_spin_lock(&lock);
+	struct band_quiet_hours q = quiet;
+
+	k_spin_unlock(&lock, key);
+
+	return in_window(minute, &q);
+}
+
 static int show_mode(void)
 {
 	return status_led_set(mode == BAND_MODE_NIGHT ? STATUS_LED_GREEN : STATUS_LED_WHITE);
@@ -134,6 +191,7 @@ static int show_mode(void)
 int band_mode_init(bool try_restore, bool *restored)
 {
 	load_intervals();
+	load_quiet_hours();
 
 	*restored = try_restore && restore_state();
 
@@ -194,6 +252,29 @@ void band_mode_get_intervals(struct band_intervals *iv)
 	k_spin_unlock(&lock, key);
 }
 
+int band_mode_request_quiet_hours(const struct band_quiet_hours *q)
+{
+	if (!quiet_valid(q)) {
+		return -EINVAL;
+	}
+
+	k_spinlock_key_t key = k_spin_lock(&lock);
+
+	requested_quiet = *q;
+	quiet_pending = true;
+	k_spin_unlock(&lock, key);
+
+	return 0;
+}
+
+void band_mode_get_quiet_hours(struct band_quiet_hours *q)
+{
+	k_spinlock_key_t key = k_spin_lock(&lock);
+
+	*q = quiet_pending ? requested_quiet : quiet;
+	k_spin_unlock(&lock, key);
+}
+
 enum band_mode band_mode_get(void)
 {
 	return mode;
@@ -228,30 +309,42 @@ static uint32_t apply_requests(void)
 	}
 
 	k_spinlock_key_t key = k_spin_lock(&lock);
-	bool pending = intervals_pending;
+	bool new_intervals = intervals_pending;
 	struct band_intervals old = intervals;
 	struct band_intervals now = requested_intervals;
+	bool new_quiet = quiet_pending;
+	struct band_quiet_hours now_quiet = requested_quiet;
 
-	if (pending) {
+	if (new_intervals) {
 		intervals = now;
 		intervals_pending = false;
 	}
+	if (new_quiet) {
+		quiet = now_quiet;
+		quiet_pending = false;
+	}
 	k_spin_unlock(&lock, key);
 
-	if (!pending) {
-		return events;
+	if (new_intervals) {
+		events |= BAND_EVENT_INTERVALS;
+
+		/* A shorter or longer wait applies from now, not from the last reminder. */
+		if ((mode == BAND_MODE_DAILY && now.daily_min != old.daily_min) ||
+		    (mode == BAND_MODE_NIGHT && now.night_min != old.night_min)) {
+			restart_interval();
+		}
+
+		if (storage_save(STORAGE_KEY_INTERVALS, &now, sizeof(now)) < 0) {
+			events |= BAND_EVENT_SAVE_FAILED;
+		}
 	}
 
-	events |= BAND_EVENT_INTERVALS;
+	if (new_quiet) {
+		events |= BAND_EVENT_QUIET_HOURS;
 
-	/* A shorter or longer wait applies from now, not from the last reminder. */
-	if ((mode == BAND_MODE_DAILY && now.daily_min != old.daily_min) ||
-	    (mode == BAND_MODE_NIGHT && now.night_min != old.night_min)) {
-		restart_interval();
-	}
-
-	if (storage_save(STORAGE_KEY_INTERVALS, &now, sizeof(now)) < 0) {
-		events |= BAND_EVENT_SAVE_FAILED;
+		if (storage_save(STORAGE_KEY_QUIET, &now_quiet, sizeof(now_quiet)) < 0) {
+			events |= BAND_EVENT_SAVE_FAILED;
+		}
 	}
 
 	return events;
@@ -263,8 +356,14 @@ uint32_t band_mode_process(void)
 
 	if (k_uptime_get() >= next_reminder_ms) {
 		next_reminder_ms += (int64_t)band_mode_interval_s() * 1000;
-		haptic_double_tap();
-		events |= BAND_EVENT_REMINDER;
+
+		/* Skipped, not delayed: the schedule carries on through the night. */
+		if (reminder_is_quiet()) {
+			events |= BAND_EVENT_QUIET_SKIPPED;
+		} else {
+			haptic_double_tap();
+			events |= BAND_EVENT_REMINDER;
+		}
 	}
 
 	/* Cheap RAM writes, so the kept copy is never more than one pass old. */

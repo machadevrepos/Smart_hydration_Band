@@ -18,6 +18,7 @@
 #include "band_mode.h"
 #include "ble_service.h"
 #include "haptic.h"
+#include "wall_clock.h"
 
 LOG_MODULE_REGISTER(ble_service, LOG_LEVEL_INF);
 
@@ -46,8 +47,15 @@ static struct bt_uuid_128 umbra_mode_uuid = BT_UUID_INIT_128(UMBRA_UUID_VAL(2));
 static struct bt_uuid_128 umbra_haptic_uuid = BT_UUID_INIT_128(UMBRA_UUID_VAL(3));
 static struct bt_uuid_128 umbra_intervals_uuid = BT_UUID_INIT_128(UMBRA_UUID_VAL(4));
 
+static struct bt_uuid_128 umbra_time_uuid = BT_UUID_INIT_128(UMBRA_UUID_VAL(5));
+static struct bt_uuid_128 umbra_quiet_uuid = BT_UUID_INIT_128(UMBRA_UUID_VAL(6));
+
 /* Intervals value: Daily then Night minutes, each uint16 little endian. */
 #define INTERVALS_LEN 4
+/* Time value: UTC seconds uint32 LE, then local offset in minutes int16 LE. */
+#define TIME_LEN 6
+/* Quiet hours value: start then end, local minutes after midnight, uint16 LE. */
+#define QUIET_LEN 4
 
 /*
  * The Nordic UART JSON line is for the current app, which reads nothing else.
@@ -199,6 +207,88 @@ static ssize_t write_intervals(struct bt_conn *conn, const struct bt_gatt_attr *
 	return len;
 }
 
+/* Reads 0 UTC seconds while the time is not set. */
+static ssize_t read_time(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
+			 uint16_t len, uint16_t offset)
+{
+	uint32_t utc_s = 0;
+	uint8_t value[TIME_LEN];
+
+	(void)wall_clock_now(&utc_s);
+	sys_put_le32(utc_s, &value[0]);
+	sys_put_le16((uint16_t)wall_clock_tz_offset(), &value[4]);
+
+	return bt_gatt_attr_read(conn, attr, buf, len, offset, value, sizeof(value));
+}
+
+static ssize_t write_time(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf,
+			  uint16_t len, uint16_t offset, uint8_t flags)
+{
+	ARG_UNUSED(conn);
+	ARG_UNUSED(attr);
+	ARG_UNUSED(flags);
+
+	if (offset != 0) {
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+	}
+	if (len != TIME_LEN) {
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+	}
+
+	uint32_t utc_s = sys_get_le32(&((const uint8_t *)buf)[0]);
+	int16_t tz = (int16_t)sys_get_le16(&((const uint8_t *)buf)[4]);
+
+	if (wall_clock_set(utc_s, tz) < 0) {
+		return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
+	}
+
+	uint16_t minute = 0;
+
+	(void)wall_clock_local_minute(&minute);
+	printk("  BLE command: time set, local %02u:%02u (UTC offset %d min)\n", minute / 60,
+	       minute % 60, tz);
+	return len;
+}
+
+static ssize_t read_quiet(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
+			  uint16_t len, uint16_t offset)
+{
+	struct band_quiet_hours q;
+	uint8_t value[QUIET_LEN];
+
+	band_mode_get_quiet_hours(&q);
+	sys_put_le16(q.start_min, &value[0]);
+	sys_put_le16(q.end_min, &value[2]);
+
+	return bt_gatt_attr_read(conn, attr, buf, len, offset, value, sizeof(value));
+}
+
+static ssize_t write_quiet(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf,
+			   uint16_t len, uint16_t offset, uint8_t flags)
+{
+	ARG_UNUSED(conn);
+	ARG_UNUSED(attr);
+	ARG_UNUSED(flags);
+
+	if (offset != 0) {
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+	}
+	if (len != QUIET_LEN) {
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+	}
+
+	struct band_quiet_hours q = {
+		.start_min = sys_get_le16(&((const uint8_t *)buf)[0]),
+		.end_min = sys_get_le16(&((const uint8_t *)buf)[2]),
+	};
+
+	if (band_mode_request_quiet_hours(&q) < 0) {
+		return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
+	}
+
+	return len;
+}
+
 static ssize_t write_haptic(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf,
 			    uint16_t len, uint16_t offset, uint8_t flags)
 {
@@ -236,6 +326,11 @@ BT_GATT_SERVICE_DEFINE(umbra_svc,
 	BT_GATT_CHARACTERISTIC(&umbra_intervals_uuid.uuid, BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE,
 			       BT_GATT_PERM_READ | BT_GATT_PERM_WRITE, read_intervals,
 			       write_intervals, NULL),
+	BT_GATT_CHARACTERISTIC(&umbra_time_uuid.uuid, BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE,
+			       BT_GATT_PERM_READ | BT_GATT_PERM_WRITE, read_time, write_time, NULL),
+	BT_GATT_CHARACTERISTIC(&umbra_quiet_uuid.uuid, BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE,
+			       BT_GATT_PERM_READ | BT_GATT_PERM_WRITE, read_quiet, write_quiet,
+			       NULL),
 );
 
 /* Positions of the value attributes in umbra_svc, for notifying. */

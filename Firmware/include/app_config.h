@@ -9,6 +9,16 @@
 #define APP_DAILY_REMINDER_MIN 90
 #define APP_NIGHT_REMINDER_MIN 35
 
+/*
+ * Default quiet hours, local time in minutes after midnight: no Daily Mode
+ * reminders from 23:00 to 07:00. Night Mode reminders always fire, since a
+ * night out runs through these hours. Needs the time from the app; until the
+ * app has set it after power-on, there are no quiet hours. The app can change
+ * them; start equal to end turns them off.
+ */
+#define APP_QUIET_START_MIN (23 * 60)
+#define APP_QUIET_END_MIN   (7 * 60)
+
 /* Reminder: two pulses with a gap. Button press: one buzz. All in ms. */
 #define APP_HAPTIC_TAP_MS     200
 #define APP_HAPTIC_TAP_GAP_MS 200

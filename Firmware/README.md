@@ -49,6 +49,7 @@ Firmware/
 │   ├── battery.h                     battery measurement API
 │   ├── watchdog.h                    hardware watchdog API
 │   ├── storage.h                     flash storage API
+│   ├── wall_clock.h                  time of day API
 │   └── max30101.h                    sensor wrapper API
 ├── src/
 │   ├── main.c                        initialization and FIFO polling loop
@@ -62,7 +63,8 @@ Firmware/
 │   ├── ble_service.c                 advertising, services, app commands
 │   ├── battery.c                     battery voltage to percent
 │   ├── watchdog.c                    hardware watchdog, reset reason
-│   └── storage.c                     settings and NVS in flash
+│   ├── storage.c                     settings and NVS in flash
+│   └── wall_clock.c                  time of day from the app
 └── prj.conf
 ```
 
@@ -148,6 +150,17 @@ sets, 1-240 minutes (the app offers 20, 30, 45 and 60), are saved in flash and
 kept through power-off; writing 0 restores a default. The mode is not kept
 through power-off: the band always powers up in Daily Mode, as specified.
 
+**Quiet hours.** Daily Mode reminders due from 23:00 to 07:00 local time are
+skipped (logged as `reminder skipped: quiet hours`); the schedule carries on, so
+the first reminder after 07:00 comes at its normal time. Night Mode always buzzes,
+since a night out runs through these hours. The band has no battery-backed clock,
+so quiet hours need the time from the app: the app should write it on every
+connection. After a power-on, until the app has written it, there are no quiet
+hours and the band buzzes through the night. A watchdog reset keeps the time.
+The app can change the window or turn it off (start equal to end); the setting
+is kept in flash. The clock runs from the nRF52's internal oscillator, accurate
+to about 45 s a day, so writing it on each connection keeps it close.
+
 The reminders, LED, button and BLE do not depend on the sensors. If the
 MAX30101 does not start at power-up, the error is logged, the status line shows
 `heart-rate sensor unavailable`, no heart rate is sent, and everything else runs. If MAX30101 reads start failing
@@ -214,6 +227,8 @@ the phone may choose differently.
 | | Mode | `1ab10002-...` | Read, write, notify | 1 byte: 0 Daily, 1 Night, on change. Write to switch |
 | | Haptic | `1ab10003-...` | Write | 1 byte: 1 fires the double tap |
 | | Intervals | `1ab10004-...` | Read, write | Daily then Night minutes, uint16 LE each, 1-240, 0 = default. Kept in flash |
+| | Time | `1ab10005-...` | Read, write | UTC seconds uint32 LE, then local offset from UTC in minutes int16 LE. Write on every connection. Reads 0 UTC if not set |
+| | Quiet hours | `1ab10006-...` | Read, write | Start then end, local minutes after midnight, uint16 LE each, 0-1439. Equal = off. Default 1380, 420. Kept in flash |
 
 An app should subscribe, then read Battery, Steps and Mode once for their current
 values. The Umbra characteristic UUIDs share the service UUID's other digits.

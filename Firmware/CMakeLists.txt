@@ -22,4 +22,5 @@ target_sources(app PRIVATE
   src/battery.c
   src/watchdog.c
   src/storage.c
+  src/wall_clock.c
 )
