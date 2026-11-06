@@ -29,6 +29,9 @@ LOG_MODULE_REGISTER(ble_service, LOG_LEVEL_INF);
  */
 #define ADV_RETRY_MS 5000
 
+/* Haptic commands closer together than this are ignored. */
+#define HAPTIC_COMMAND_GAP_MS 2000
+
 /* Umbra service: 1ab10000-fde9-42a3-ab5b-82416f9bca6e, characteristics count up. */
 #define UMBRA_UUID_VAL(n) BT_UUID_128_ENCODE(0x1ab10000 + (n), 0xfde9, 0x42a3, 0xab5b, 0x82416f9bca6e)
 
@@ -76,8 +79,25 @@ static atomic_t telemetry_pending;
 static char nus_command[NUS_COMMAND_BUFFER_LEN + 1];
 static size_t nus_command_len;
 
+/*
+ * Both command paths (GATT write and NUS text) run on the Bluetooth receive
+ * context, so this needs no lock. With no pairing anyone nearby can send them;
+ * the gap stops a stuck or hostile app from buzzing the band nonstop.
+ */
 static void fire_haptic_command(void)
 {
+	static int64_t last_fired_ms;
+	static bool fired_any;
+	int64_t now = k_uptime_get();
+
+	if (fired_any && now - last_fired_ms < HAPTIC_COMMAND_GAP_MS) {
+		printk("  BLE command: double tap ignored, last one under %d s ago\n",
+		       HAPTIC_COMMAND_GAP_MS / 1000);
+		return;
+	}
+
+	fired_any = true;
+	last_fired_ms = now;
 	printk("  BLE command: double tap\n");
 	haptic_double_tap();
 }

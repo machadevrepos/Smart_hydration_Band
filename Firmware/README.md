@@ -240,7 +240,9 @@ means no notification, so an app using it should treat a few seconds without one
 the same way.
 
 Anyone nearby can connect, since the client's requirement is no pairing, so they
-could also trigger a buzz.
+could also trigger a buzz. Haptic commands less than 2 s after the last one are
+ignored (and logged), so an app cannot buzz the band nonstop. The GATT write
+still succeeds, so the app sees no error.
 
 ## Heart-rate algorithm
 
