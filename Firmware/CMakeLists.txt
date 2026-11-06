@@ -24,4 +24,5 @@ target_sources(app PRIVATE
   src/storage.c
   src/wall_clock.c
   src/data_log.c
+  src/spo2.c
 )

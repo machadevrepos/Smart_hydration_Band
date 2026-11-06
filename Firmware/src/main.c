@@ -12,6 +12,7 @@
 #include "haptic.h"
 #include "heart_rate.h"
 #include "max30101.h"
+#include "spo2.h"
 #include "status_led.h"
 #include "step_counter.h"
 #include "storage.h"
@@ -404,8 +405,8 @@ static void rate_meter_update(struct rate_meter *m, int count)
  * Drain the MAX30101 FIFO and feed the estimator. A failed read only pauses
  * heart rate: it must never keep the main loop from the button and reminders.
  */
-static void poll_heart_rate(struct max30101_sample *samples, int max, struct rate_meter *rate, struct contact *contact,
-			    struct hr_status *st)
+static void poll_heart_rate(struct max30101_sample *samples, int max, struct rate_meter *rate,
+			    struct contact *contact, struct hr_status *st)
 {
 	bool lost = false;
 	int count = max30101_read_fifo(samples, max, &lost);
@@ -416,6 +417,7 @@ static void poll_heart_rate(struct max30101_sample *samples, int max, struct rat
 			LOG_WRN("MAX30101 read failed (%d), heart rate paused", count);
 		}
 		st->read_errors++;
+		spo2_sensor_gap();
 
 		/*
 		 * No samples, so no reading: drop it rather than send a stale one.
@@ -450,6 +452,7 @@ static void poll_heart_rate(struct max30101_sample *samples, int max, struct rat
 			st->stall_reported = true;
 			LOG_WRN("MAX30101 stopped sampling, settings restored (%d)", ret);
 		}
+		spo2_sensor_gap();
 		st->last_sample_ms = k_uptime_get();
 		contact->on = false;
 		contact->count = 0;
@@ -461,6 +464,7 @@ static void poll_heart_rate(struct max30101_sample *samples, int max, struct rat
 	/* The estimator assumes evenly spaced samples, so a gap invalidates it. */
 	if (lost) {
 		LOG_WRN("MAX30101 FIFO overflow, samples lost");
+		spo2_sensor_gap();
 		heart_rate_init();
 		st->have_estimate = false;
 		st->contact_since_ms = k_uptime_get();
@@ -481,6 +485,53 @@ static void poll_heart_rate(struct max30101_sample *samples, int max, struct rat
 		if (contact->on && heart_rate_process(samples[i].ir, &hr)) {
 			st->hr = hr;
 			st->have_estimate = true;
+		}
+
+		if (spo2_measuring()) {
+			spo2_add_sample(&samples[i]);
+		}
+	}
+}
+
+/*
+ * Run the SpO2 schedule for this loop pass and print what happened. The
+ * acceleration is read only while a measurement is running.
+ */
+static void run_spo2(const struct contact *contact, const struct hr_status *st)
+{
+	struct spo2_inputs in = {
+		.contact = st->sensor_ok && st->read_errors == 0 && contact->on,
+		.pulse = st->have_estimate && st->hr.bpm > 0 && !st->hr.held,
+	};
+	unsigned int secs = (unsigned int)(k_uptime_get() / 1000);
+	struct spo2_result res;
+	uint32_t events;
+
+	if (spo2_measuring() && st->steps_ok) {
+		in.accel_ok = step_counter_read_accel(in.accel) == 0;
+	}
+
+	events = spo2_process(&in);
+	if (events == 0) {
+		return;
+	}
+
+	spo2_get_result(&res);
+	if (events & SPO2_EVENT_STARTED) {
+		printk("  %02u:%02u   SpO2: starting
+", secs / 60, secs % 60);
+	}
+	if (events & SPO2_EVENT_DONE) {
+		if (res.status == SPO2_STATUS_OK) {
+			printk("  %02u:%02u   SpO2 %u%% (quality %u, R %u.%03u)
+", secs / 60,
+			       secs % 60, res.percent, res.quality, res.ratio_milli / 1000,
+			       res.ratio_milli % 1000);
+		} else {
+			printk("  %02u:%02u   SpO2 not measured: %s (R %u.%03u), retry in %d min
+",
+			       secs / 60, secs % 60, spo2_status_name(res.status),
+			       res.ratio_milli / 1000, res.ratio_milli % 1000, APP_SPO2_RETRY_MIN);
 		}
 	}
 }
@@ -513,6 +564,7 @@ int main(void)
 	if (ret < 0) {
 		LOG_ERR("MAX30101 unavailable, no heart rate (%d)", ret);
 	}
+	spo2_init(status.sensor_ok);
 
 	ret = haptic_init();
 	if (ret < 0) {
@@ -593,6 +645,8 @@ int main(void)
 		if (status.sensor_ok) {
 			poll_heart_rate(samples, ARRAY_SIZE(samples), &rate, &contact, &status);
 		}
+
+		run_spo2(&contact, &status);
 
 		if (button_ok && button_pressed()) {
 			button_presses++;

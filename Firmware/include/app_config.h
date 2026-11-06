@@ -53,6 +53,24 @@
 #define APP_BATTERY_OFF_READINGS 6
 #define APP_BATTERY_VALID_MV     2500
 
+/*
+ * SpO2 spot checks (src/spo2.c): the first about 2 min after power-up, then
+ * every 30 min while worn (the client's sampling plan), and 5 min after an
+ * attempt that failed (movement, weak signal, off the wrist).
+ */
+#define APP_SPO2_FIRST_MIN    2
+#define APP_SPO2_INTERVAL_MIN 30
+#define APP_SPO2_RETRY_MIN    5
+
+/*
+ * SpO2 = A - B * R, R being the ratio of ratios. 110 - 25 R is the textbook
+ * starting point; it is NOT calibrated for this board and enclosure. Fit A and
+ * B from R (printed over RTT) against a reference fingertip oximeter; see
+ * "SpO2 calibration" in the README.
+ */
+#define APP_SPO2_CAL_A 110.0f
+#define APP_SPO2_CAL_B 25.0f
+
 /* Status LED level per color, 0-255. Current and brightness rise with it. */
 #define APP_LED_LEVEL 40
 
