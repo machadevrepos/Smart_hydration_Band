@@ -20,4 +20,5 @@ target_sources(app PRIVATE
   src/band_mode.c
   src/ble_service.c
   src/battery.c
+  src/watchdog.c
 )

@@ -47,6 +47,7 @@ Firmware/
 │   ├── band_mode.h                   Daily and Night modes, reminders
 │   ├── ble_service.h                 BLE link to the app
 │   ├── battery.h                     battery measurement API
+│   ├── watchdog.h                    hardware watchdog API
 │   └── max30101.h                    sensor wrapper API
 ├── src/
 │   ├── main.c                        initialization and FIFO polling loop
@@ -58,7 +59,8 @@ Firmware/
 │   ├── haptic.c                      motor patterns in the background
 │   ├── band_mode.c                   mode, LED color and reminder timing
 │   ├── ble_service.c                 advertising, services, app commands
-│   └── battery.c                     battery voltage to percent
+│   ├── battery.c                     battery voltage to percent
+│   └── watchdog.c                    hardware watchdog, reset reason
 └── prj.conf
 ```
 
@@ -162,6 +164,20 @@ means the SPI transfer finished, not that an LED received it. On P0.25 each colo
 bit lasts 2 us: a 0 is a 250 ns high pulse and a 1 is 750 ns. At `APP_LED_LEVEL` 40
 each update is a 48 us burst, in green-red-blue order, each channel sending
 `00101000` when on. This has not yet been confirmed on the board.
+
+## Watchdog
+
+The nRF52832 hardware watchdog resets the band if it is not fed for 10 s.
+`main()` starts it first and feeds it on every loop pass (about every 40 ms),
+but only while the system work queue, which runs the motor patterns and the
+Bluetooth host, has also checked in within the last 5 s. A hang in either one,
+or a fatal error that halts the CPU, therefore ends in a reset back to Daily
+Mode with reminders running, instead of a silent band. The watchdog pauses
+while a debugger halts the CPU.
+
+After every start the RTT output shows why the chip reset, for example
+`last reset: power-on` or `last reset: watchdog`. Any `watchdog` in a soak test
+means something hung and needs investigating.
 
 ## BLE
 

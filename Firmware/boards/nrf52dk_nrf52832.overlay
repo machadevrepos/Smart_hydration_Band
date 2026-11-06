@@ -160,6 +160,11 @@
 	status = "disabled";
 };
 
+/* Hardware watchdog, used by src/watchdog.c. */
+&wdt0 {
+	status = "okay";
+};
+
 /* Not wired up on this PCB, and output goes over RTT. */
 &uart0 {
 	status = "disabled";

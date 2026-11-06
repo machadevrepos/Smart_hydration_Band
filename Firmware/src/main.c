@@ -11,6 +11,7 @@
 #include "heart_rate.h"
 #include "max30101.h"
 #include "step_counter.h"
+#include "watchdog.h"
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
@@ -368,7 +369,11 @@ int main(void)
 	uint32_t button_presses = 0;
 	int64_t next_status_ms = STATUS_PERIOD_MS;
 	int64_t next_battery_ms = 0;
+	int wdt_ret;
 	int ret;
+
+	/* First, so a hang anywhere from here on resets the band. */
+	wdt_ret = watchdog_init();
 
 	/*
 	 * Each of these is optional: the rest of the band runs if one fails.
@@ -422,6 +427,11 @@ int main(void)
 	heart_rate_init();
 	print_header();
 
+	printk("  last reset: %s\n", watchdog_reset_cause());
+	if (wdt_ret < 0) {
+		LOG_ERR("Watchdog unavailable, a hang will not reset the band (%d)", wdt_ret);
+	}
+
 	if (led_ret == 0) {
 		printk("  %s Mode, LED %s, next reminder in %u:%02u\n",
 		       band_mode_name(band_mode_get()), mode_led_name(band_mode_get()),
@@ -459,6 +469,7 @@ int main(void)
 			publish_telemetry(&contact, &status);
 		}
 
+		watchdog_feed();
 		k_sleep(K_MSEC(APP_POLL_INTERVAL_MS));
 	}
 
