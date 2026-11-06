@@ -309,6 +309,13 @@ estimate, not a medical reading.
 writes `1` to the SpO2 characteristic. A scheduled check waits for skin contact
 and a heart-rate lock. The intervals are in `include/app_config.h`.
 
+**Bench mode** (`APP_SPO2_BENCH_MODE` in `include/app_config.h`) is for testing
+and calibration: the first check starts as soon as the heart rate locks, and the
+next follows 10 s after each one ends, so a seated session gives a reading about
+every 45 s. The red LED is then lit most of the time. While it is on, the build
+prints a warning and the band prints `SpO2 BENCH MODE` at start-up. **Set it to 0
+before delivery.**
+
 **How, about 35 s.** The red LED (off otherwise) is turned on and its current
 adjusted so the red level sits near 120000 counts. After 2 s for the filters to
 settle, seven 4 s windows are measured. In each, DC is the mean and AC the RMS

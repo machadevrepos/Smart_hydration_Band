@@ -269,7 +269,7 @@ static void publish_telemetry(const struct contact *contact, const struct hr_sta
 	/* A spot check stays current until the next one is due, plus a margin. */
 	spo2_get_result(&res);
 	if (res.uptime_ms != 0 && k_uptime_get() - res.uptime_ms <=
-					  (int64_t)(APP_SPO2_INTERVAL_MIN + 5) * 60 * 1000) {
+					  (int64_t)(APP_SPO2_INTERVAL_S + 5 * 60) * 1000) {
 		spo2 = res.percent;
 	}
 
@@ -538,9 +538,9 @@ static void run_spo2(const struct contact *contact, const struct hr_status *st)
 			       secs % 60, res.percent, res.quality, res.ratio_milli / 1000,
 			       res.ratio_milli % 1000);
 		} else {
-			printk("  %02u:%02u   SpO2 not measured: %s (R %u.%03u), retry in %d min\n",
+			printk("  %02u:%02u   SpO2 not measured: %s (R %u.%03u), retry in %d s\n",
 			       secs / 60, secs % 60, spo2_status_name(res.status),
-			       res.ratio_milli / 1000, res.ratio_milli % 1000, APP_SPO2_RETRY_MIN);
+			       res.ratio_milli / 1000, res.ratio_milli % 1000, APP_SPO2_RETRY_S);
 		}
 	}
 }
@@ -633,6 +633,9 @@ int main(void)
 	print_header();
 
 	printk("  last reset: %s\n", watchdog_reset_cause());
+	if (APP_SPO2_BENCH_MODE) {
+		printk("  SpO2 BENCH MODE: measuring back to back, not for delivery\n");
+	}
 	printk("  time of day: %s\n", clock_known ? "kept through the reset"
 						 : "not set, no quiet hours until the app sets it");
 	if (wdt_ret < 0) {

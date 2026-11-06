@@ -54,13 +54,35 @@
 #define APP_BATTERY_VALID_MV     2500
 
 /*
- * SpO2 spot checks (src/spo2.c): the first about 2 min after power-up, then
- * every 30 min while worn (the client's sampling plan), and 5 min after an
- * attempt that failed (movement, weak signal, off the wrist).
+ * SpO2 spot checks (src/spo2.c), in seconds: the first about 2 min after
+ * power-up, then every 30 min while worn (the client's sampling plan), and
+ * 5 min after an attempt that failed (movement, weak signal, off the wrist).
  */
-#define APP_SPO2_FIRST_MIN    2
-#define APP_SPO2_INTERVAL_MIN 30
-#define APP_SPO2_RETRY_MIN    5
+#define APP_SPO2_FIRST_S    (2 * 60)
+#define APP_SPO2_INTERVAL_S (30 * 60)
+#define APP_SPO2_RETRY_S    (5 * 60)
+/* A scheduled check that finds the band off the wrist, or no pulse yet, looks again after this. */
+#define APP_SPO2_WAIT_S     60
+
+/*
+ * SpO2 bench mode, for testing and calibration only: measure as soon as the
+ * heart rate locks, then back to back with a 10 s gap, so data comes quickly.
+ * The red LED is lit most of the time, so battery life drops. The build prints a
+ * warning and the band prints "SpO2 BENCH MODE" at start-up while it is on.
+ * Set it to 0 for the delivered firmware.
+ */
+#define APP_SPO2_BENCH_MODE 1
+
+#if APP_SPO2_BENCH_MODE
+#undef APP_SPO2_FIRST_S
+#undef APP_SPO2_INTERVAL_S
+#undef APP_SPO2_RETRY_S
+#undef APP_SPO2_WAIT_S
+#define APP_SPO2_FIRST_S    0
+#define APP_SPO2_INTERVAL_S 10
+#define APP_SPO2_RETRY_S    10
+#define APP_SPO2_WAIT_S     2
+#endif
 
 /*
  * SpO2 = A - B * R, R being the ratio of ratios. 110 - 25 R is the textbook

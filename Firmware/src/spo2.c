@@ -12,6 +12,10 @@
 
 LOG_MODULE_REGISTER(spo2, LOG_LEVEL_INF);
 
+#if APP_SPO2_BENCH_MODE
+#warning "SpO2 bench mode is on (APP_SPO2_BENCH_MODE in app_config.h): not for delivery"
+#endif
+
 #if MAX30101_SAMPLE_RATE_HZ != 100
 #error "SpO2 timing and filter coefficients are for 100 Hz"
 #endif
@@ -178,7 +182,7 @@ bool spo2_measuring(void)
 void spo2_init(bool ok)
 {
 	sensor_ok = ok;
-	next_due_ms = k_uptime_get() + (int64_t)APP_SPO2_FIRST_MIN * 60 * 1000;
+	next_due_ms = k_uptime_get() + (int64_t)APP_SPO2_FIRST_S * 1000;
 	set_status(ok ? SPO2_STATUS_NONE : SPO2_STATUS_SENSOR);
 }
 
@@ -276,9 +280,9 @@ static void finish(enum spo2_status status, float ratio, float corr_mean)
 	}
 	k_spin_unlock(&result_lock, key);
 
-	next_due_ms = now + (int64_t)(status == SPO2_STATUS_OK ? APP_SPO2_INTERVAL_MIN
-							      : APP_SPO2_RETRY_MIN) *
-				    60 * 1000;
+	next_due_ms = now + (int64_t)(status == SPO2_STATUS_OK ? APP_SPO2_INTERVAL_S
+							      : APP_SPO2_RETRY_S) *
+				    1000;
 	pending_events |= SPO2_EVENT_DONE;
 }
 
@@ -518,17 +522,17 @@ uint32_t spo2_process(const struct spo2_inputs *in)
 				if (asked) {
 					finish(SPO2_STATUS_SENSOR, 0.0f, 0.0f);
 				}
-				next_due_ms = now + (int64_t)APP_SPO2_INTERVAL_MIN * 60 * 1000;
+				next_due_ms = now + (int64_t)APP_SPO2_INTERVAL_S * 1000;
 			} else if (!in->contact) {
-				/* Asked: answer at once. Scheduled: look again in a minute. */
+				/* Asked: answer at once. Scheduled: look again shortly. */
 				if (asked) {
 					finish(SPO2_STATUS_NO_CONTACT, 0.0f, 0.0f);
 				} else {
-					next_due_ms = now + 60 * 1000;
+					next_due_ms = now + (int64_t)APP_SPO2_WAIT_S * 1000;
 				}
 			} else if (!in->pulse && !asked) {
 				/* Wait for the heart-rate lock, which shows there is a pulse. */
-				next_due_ms = now + 60 * 1000;
+				next_due_ms = now + (int64_t)APP_SPO2_WAIT_S * 1000;
 			} else {
 				start(now);
 			}

@@ -20,7 +20,7 @@
  * IR pulses that do not match are thrown out; with too few good windows no
  * value is reported. Each window prints a diagnostic line over RTT.
  *
- * Measurements run every APP_SPO2_INTERVAL_MIN minutes while the band is worn,
+ * Measurements run every APP_SPO2_INTERVAL_S seconds while the band is worn,
  * sooner after a failed attempt, and on request from the app.
  */
 
