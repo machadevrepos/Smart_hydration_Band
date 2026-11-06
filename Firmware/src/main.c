@@ -75,6 +75,8 @@ static bool contact_update(struct contact *c, int32_t ir)
 struct hr_status {
 	/* False if the MAX30101 did not start: no heart rate, the rest runs. */
 	bool sensor_ok;
+	/* Consecutive failed FIFO reads; heart rate is paused while non-zero. */
+	uint32_t read_errors;
 	int64_t contact_since_ms;
 	bool have_estimate;
 	struct hr_estimate hr;
@@ -188,6 +190,8 @@ static void format_rate(const struct contact *contact, const struct hr_status *s
 
 	if (!st->sensor_ok) {
 		snprintk(status_text, sizeof(status_text), "heart-rate sensor unavailable");
+	} else if (st->read_errors != 0) {
+		snprintk(status_text, sizeof(status_text), "heart-rate sensor not responding");
 	} else if (!contact->on) {
 		snprintk(status_text, sizeof(status_text), "no skin contact");
 	} else if (!st->have_estimate) {
@@ -291,6 +295,68 @@ static void rate_meter_update(struct rate_meter *m, int count)
 	rate_meter_restart(m);
 }
 
+/*
+ * Drain the MAX30101 FIFO and feed the estimator. A failed read only pauses
+ * heart rate: it must never keep the main loop from the button and reminders.
+ */
+static void poll_heart_rate(int32_t *ir, int max, struct rate_meter *rate, struct contact *contact,
+			    struct hr_status *st)
+{
+	bool lost = false;
+	int count = max30101_read_fifo(ir, max, &lost);
+
+	if (count < 0) {
+		/* Logged once per failure run, since the loop retries every poll. */
+		if (st->read_errors == 0) {
+			LOG_WRN("MAX30101 read failed (%d), heart rate paused", count);
+		}
+		st->read_errors++;
+
+		/*
+		 * No samples, so no reading: drop it rather than send a stale one.
+		 * Contact must be found again, which also restarts the estimator.
+		 */
+		contact->on = false;
+		contact->count = 0;
+		st->have_estimate = false;
+		return;
+	}
+
+	if (st->read_errors != 0) {
+		LOG_INF("MAX30101 reads recovered after %u failures", st->read_errors);
+		st->read_errors = 0;
+		rate_meter_restart(rate);
+		/* Samples from before the gap are not evenly spaced with the rest. */
+		return;
+	}
+
+	/* The estimator assumes evenly spaced samples, so a gap invalidates it. */
+	if (lost) {
+		LOG_WRN("MAX30101 FIFO overflow, samples lost");
+		heart_rate_init();
+		st->have_estimate = false;
+		st->contact_since_ms = k_uptime_get();
+		rate_meter_restart(rate);
+	} else {
+		rate_meter_update(rate, count);
+	}
+
+	for (int i = 0; i < count; i++) {
+		struct hr_estimate hr;
+
+		if (contact_update(contact, ir[i])) {
+			heart_rate_init();
+			st->have_estimate = false;
+			st->contact_since_ms = k_uptime_get();
+		}
+
+		if (contact->on && heart_rate_process(ir[i], &hr)) {
+			st->hr = hr;
+			st->have_estimate = true;
+		}
+	}
+}
+
 int main(void)
 {
 	static int32_t ir[MAX30101_FIFO_DEPTH];
@@ -368,43 +434,8 @@ int main(void)
 	rate_meter_restart(&rate);
 
 	for (;;) {
-		bool lost = false;
-		int count = status.sensor_ok ? max30101_read_fifo(ir, ARRAY_SIZE(ir), &lost) : 0;
-
-		if (count < 0) {
-			LOG_WRN("MAX30101 read failed (%d)", count);
-			heart_rate_init();
-			status.have_estimate = false;
-			status.contact_since_ms = k_uptime_get();
-			rate_meter_restart(&rate);
-			k_sleep(K_MSEC(APP_POLL_INTERVAL_MS));
-			continue;
-		}
-
-		/* The estimator assumes evenly spaced samples, so a gap invalidates it. */
-		if (lost) {
-			LOG_WRN("MAX30101 FIFO overflow, samples lost");
-			heart_rate_init();
-			status.have_estimate = false;
-			status.contact_since_ms = k_uptime_get();
-			rate_meter_restart(&rate);
-		} else if (status.sensor_ok) {
-			rate_meter_update(&rate, count);
-		}
-
-		for (int i = 0; i < count; i++) {
-			struct hr_estimate hr;
-
-			if (contact_update(&contact, ir[i])) {
-				heart_rate_init();
-				status.have_estimate = false;
-				status.contact_since_ms = k_uptime_get();
-			}
-
-			if (contact.on && heart_rate_process(ir[i], &hr)) {
-				status.hr = hr;
-				status.have_estimate = true;
-			}
+		if (status.sensor_ok) {
+			poll_heart_rate(ir, ARRAY_SIZE(ir), &rate, &contact, &status);
 		}
 
 		if (button_ok && button_pressed()) {
