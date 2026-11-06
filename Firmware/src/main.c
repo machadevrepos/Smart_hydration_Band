@@ -529,19 +529,16 @@ static void run_spo2(const struct contact *contact, const struct hr_status *st)
 
 	spo2_get_result(&res);
 	if (events & SPO2_EVENT_STARTED) {
-		printk("  %02u:%02u   SpO2: starting
-", secs / 60, secs % 60);
+		printk("  %02u:%02u   SpO2: starting\n", secs / 60, secs % 60);
 	}
 	if (events & SPO2_EVENT_DONE) {
 		if (res.status == SPO2_STATUS_OK) {
 			data_log_note_spo2(res.percent, res.quality);
-			printk("  %02u:%02u   SpO2 %u%% (quality %u, R %u.%03u)
-", secs / 60,
+			printk("  %02u:%02u   SpO2 %u%% (quality %u, R %u.%03u)\n", secs / 60,
 			       secs % 60, res.percent, res.quality, res.ratio_milli / 1000,
 			       res.ratio_milli % 1000);
 		} else {
-			printk("  %02u:%02u   SpO2 not measured: %s (R %u.%03u), retry in %d min
-",
+			printk("  %02u:%02u   SpO2 not measured: %s (R %u.%03u), retry in %d min\n",
 			       secs / 60, secs % 60, spo2_status_name(res.status),
 			       res.ratio_milli / 1000, res.ratio_milli % 1000, APP_SPO2_RETRY_MIN);
 		}
