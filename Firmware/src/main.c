@@ -4,6 +4,8 @@
 
 #include "app_config.h"
 #include "band_mode.h"
+#include "battery.h"
+#include "ble_service.h"
 #include "button.h"
 #include "haptic.h"
 #include "heart_rate.h"
@@ -27,6 +29,7 @@ BUILD_ASSERT(HR_SAMPLE_RATE_HZ == MAX30101_SAMPLE_RATE_HZ,
 
 /* Heart-rate status is printed once a second. */
 #define STATUS_PERIOD_MS 1000
+#define BATTERY_PERIOD_MS 10000
 /* While off the skin, repeat the status only this often. */
 #define NO_CONTACT_REPEAT_MS 10000
 
@@ -77,6 +80,9 @@ struct hr_status {
 	bool steps_ok;
 	uint32_t steps;
 	uint32_t printed_steps;
+	bool battery_ok;
+	bool have_battery;
+	uint8_t battery_percent;
 };
 
 /*
@@ -122,6 +128,44 @@ static void print_reminder(void)
 
 	printk("  %02u:%02u   reminder: double tap (%s Mode), next in %u:%02u\n", secs / 60,
 	       secs % 60, band_mode_name(band_mode_get()), interval / 60, interval % 60);
+}
+
+static void update_battery(struct hr_status *st)
+{
+	unsigned int secs = (unsigned int)(k_uptime_get() / 1000);
+	uint8_t percent;
+	int32_t millivolts;
+	int ret;
+
+	if (!st->battery_ok) {
+		return;
+	}
+
+	ret = battery_read(&percent, &millivolts);
+	if (ret < 0) {
+		printk("  %02u:%02u   battery read FAILED (%d)\n", secs / 60, secs % 60, ret);
+		return;
+	}
+
+	printk("  %02u:%02u   battery %u%% (%d mV)\n", secs / 60, secs % 60, percent, millivolts);
+
+	st->have_battery = true;
+	st->battery_percent = percent;
+}
+
+/* Send the reading the status line just showed. A reading needs skin contact. */
+static void publish_telemetry(const struct contact *contact, const struct hr_status *st)
+{
+	struct ble_telemetry telemetry = {
+		.heart_rate = contact->on && st->have_estimate ? st->hr.bpm : 0,
+		.steps_valid = st->steps_ok,
+		.steps = st->steps,
+		.night_mode = band_mode_get() == BAND_MODE_NIGHT,
+		.battery_valid = st->have_battery,
+		.battery_percent = st->battery_percent,
+	};
+
+	ble_service_publish(&telemetry);
 }
 
 static void print_header(void)
@@ -253,6 +297,7 @@ int main(void)
 	bool button_ok;
 	uint32_t button_presses = 0;
 	int64_t next_status_ms = STATUS_PERIOD_MS;
+	int64_t next_battery_ms = 0;
 	int ret;
 
 	ret = max30101_init();
@@ -281,6 +326,17 @@ int main(void)
 	status.steps_ok = ret == 0;
 	if (ret < 0) {
 		LOG_ERR("Step counter unavailable (%d)", ret);
+	}
+
+	ret = battery_init();
+	status.battery_ok = ret == 0;
+	if (ret < 0) {
+		LOG_ERR("Battery measurement unavailable (%d)", ret);
+	}
+
+	ret = ble_service_init();
+	if (ret < 0) {
+		LOG_ERR("Bluetooth unavailable (%d)", ret);
 	}
 
 	/* Loading the BMI270 outlasts the FIFO, so start from an empty one. */
@@ -353,10 +409,16 @@ int main(void)
 			print_reminder();
 		}
 
+		if (k_uptime_get() >= next_battery_ms) {
+			next_battery_ms = k_uptime_get() + BATTERY_PERIOD_MS;
+			update_battery(&status);
+		}
+
 		/* Fixed 1 s cadence, independent of FIFO bursts and the sensor clock. */
 		if (k_uptime_get() >= next_status_ms) {
 			next_status_ms += STATUS_PERIOD_MS;
 			print_status(&contact, &status);
+			publish_telemetry(&contact, &status);
 		}
 
 		k_sleep(K_MSEC(APP_POLL_INTERVAL_MS));

@@ -6,6 +6,7 @@
  * SDA P0.26 / SCL P0.27 pins.
  */
 
+#include <zephyr/dt-bindings/adc/adc.h>
 #include <zephyr/dt-bindings/gpio/gpio.h>
 #include <zephyr/dt-bindings/led/led.h>
 
@@ -72,6 +73,32 @@
 			gpios = <&gpio0 24 GPIO_ACTIVE_HIGH>;
 			label = "Haptic motor";
 		};
+	};
+};
+
+/*
+ * Battery voltage: V_bat through R10 (800k) and R11 (2M) into P0.28 / AIN4. The
+ * long acquisition time suits the divider's high impedance.
+ */
+/ {
+	zephyr,user {
+		io-channels = <&adc 0>;
+	};
+};
+
+&adc {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+
+	channel@0 {
+		reg = <0>;
+		zephyr,gain = "ADC_GAIN_1_6";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 40)>;
+		zephyr,input-positive = <NRF_SAADC_AIN4>;
+		zephyr,resolution = <12>;
+		zephyr,oversampling = <4>;
 	};
 };
 

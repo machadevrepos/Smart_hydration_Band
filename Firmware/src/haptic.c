@@ -18,6 +18,7 @@ static const uint16_t *pattern;
 static size_t pattern_len;
 static size_t pattern_step;
 static bool motor_ready;
+static K_MUTEX_DEFINE(start_lock);
 
 static void pattern_work_handler(struct k_work *work);
 static K_WORK_DELAYABLE_DEFINE(pattern_work, pattern_work_handler);
@@ -44,6 +45,9 @@ static void pattern_start(const uint16_t *steps, size_t len)
 		return;
 	}
 
+	/* Both the main loop and BLE commands can start a pattern. */
+	k_mutex_lock(&start_lock, K_FOREVER);
+
 	(void)k_work_cancel_delayable_sync(&pattern_work, &sync);
 
 	pattern = steps;
@@ -51,6 +55,8 @@ static void pattern_start(const uint16_t *steps, size_t len)
 	pattern_step = 0;
 
 	(void)k_work_schedule(&pattern_work, K_NO_WAIT);
+
+	k_mutex_unlock(&start_lock);
 }
 
 int haptic_init(void)

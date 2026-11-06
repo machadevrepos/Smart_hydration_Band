@@ -45,6 +45,8 @@ Firmware/
 │   ├── button.h                      push button API
 │   ├── haptic.h                      motor pattern API
 │   ├── band_mode.h                   Daily and Night modes, reminders
+│   ├── ble_service.h                 BLE link to the app
+│   ├── battery.h                     battery measurement API
 │   └── max30101.h                    sensor wrapper API
 ├── src/
 │   ├── main.c                        initialization and FIFO polling loop
@@ -54,7 +56,9 @@ Firmware/
 │   ├── status_led.c                  WS2812 colors
 │   ├── button.c                      button polling and debounce
 │   ├── haptic.c                      motor patterns in the background
-│   └── band_mode.c                   mode, LED color and reminder timing
+│   ├── band_mode.c                   mode, LED color and reminder timing
+│   ├── ble_service.c                 advertising, services, app commands
+│   └── battery.c                     battery voltage to percent
 └── prj.conf
 ```
 
@@ -150,6 +154,36 @@ means the SPI transfer finished, not that an LED received it. On P0.25 each colo
 bit lasts 2 us: a 0 is a 250 ns high pulse and a 1 is 750 ns. At `APP_LED_LEVEL` 40
 each update is a 48 us burst, in green-red-blue order, each channel sending
 `00101000` when on. This has not yet been confirmed on the board.
+
+## BLE
+
+The band advertises as `Umbra`, with no pairing, and runs the same with no app
+connected. It asks the phone for a 200-400 ms connection interval to save power;
+the phone may choose differently.
+
+| Service | Characteristic | UUID | Access | Value |
+| --- | --- | --- | --- | --- |
+| Heart Rate | Measurement | `0x2A37` | Notify | Standard: flags byte, then bpm. Sent with each reading |
+| Battery | Battery Level | `0x2A19` | Read, notify | 0-100 %, on change |
+| Umbra `1ab10000-fde9-42a3-ab5b-82416f9bca6e` | Steps | `1ab10001-...` | Read, notify | 32-bit little endian, on change |
+| | Mode | `1ab10002-...` | Read, notify | 1 byte: 0 Daily, 1 Night, on change |
+| | Haptic | `1ab10003-...` | Write | 1 byte: 1 fires the double tap |
+
+An app should subscribe, then read Battery, Steps and Mode once for their current
+values. The Umbra characteristic UUIDs share the service UUID's other digits.
+
+The battery percentage uses a typical LiPo curve and has not been calibrated.
+Battery is measured and printed every 10 s, and a reading taken while the motor runs may
+dip.
+
+**Transition:** the current app reads only the Nordic UART Service, so that stays
+until the app uses the services above. It sends a JSON line a second, only once
+subscribed, and accepts text containing `trigger_haptic`:
+`{"session_active":false,"heart_rate":84,"steps":120,"battery":78}`. Then remove
+it from `src/ble_service.c` and drop `CONFIG_BT_NUS`.
+
+Anyone nearby can connect, since the client's requirement is no pairing, so they
+could also trigger a buzz.
 
 ## Heart-rate algorithm
 
@@ -251,7 +285,8 @@ with a 1 uF bypass capacitor.
 ## Scope
 
 Implemented: heart rate from IR at 1 Hz, BMI270 step counting, Daily and Night
-modes with the LED, button and haptic reminders, RTT output.
+modes with the LED, button and haptic reminders, BLE services and haptic command,
+battery level, RTT output.
 
-Not implemented yet: SpO2, BLE, skin temperature, flash logging, motion-artifact
-handling for heart rate, battery level, power management.
+Not implemented yet: SpO2, skin temperature, app control of mode and interval, flash logging, motion-artifact
+handling for heart rate, power management.
