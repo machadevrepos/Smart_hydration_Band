@@ -247,11 +247,13 @@ static struct bt_nus_cb nus_callbacks = {
 
 static int format_json_line(const struct ble_telemetry *t, char *line, size_t size)
 {
-	int len = snprintk(line, size, "{\"session_active\":%s", t->night_mode ? "true" : "false");
+	/*
+	 * heart_rate is always sent, 0 meaning no reading (off the wrist, settling,
+	 * sensor fault). Leaving it out made the app keep showing the last value.
+	 */
+	int len = snprintk(line, size, "{\"session_active\":%s,\"heart_rate\":%d",
+			   t->night_mode ? "true" : "false", MAX(t->heart_rate, 0));
 
-	if (t->heart_rate > 0) {
-		len += snprintk(&line[len], size - len, ",\"heart_rate\":%d", t->heart_rate);
-	}
 	if (t->steps_valid) {
 		len += snprintk(&line[len], size - len, ",\"steps\":%u", t->steps);
 	}

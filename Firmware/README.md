@@ -215,6 +215,12 @@ subscribed, and accepts text containing `trigger_haptic`:
 `{"session_active":false,"heart_rate":84,"steps":120,"battery":78}`. Then remove
 it from `src/ble_service.c` and drop `CONFIG_BT_NUS`.
 
+`heart_rate` is in every line; `0` means there is no reading right now (off the
+wrist, settling, sensor fault). The app must show that as "no reading" rather than
+"0 bpm", and must not keep the last value. On the Heart Rate Service, no reading
+means no notification, so an app using it should treat a few seconds without one
+the same way.
+
 Anyone nearby can connect, since the client's requirement is no pairing, so they
 could also trigger a buzz.
 
