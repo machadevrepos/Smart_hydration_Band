@@ -404,11 +404,11 @@ static void rate_meter_update(struct rate_meter *m, int count)
  * Drain the MAX30101 FIFO and feed the estimator. A failed read only pauses
  * heart rate: it must never keep the main loop from the button and reminders.
  */
-static void poll_heart_rate(int32_t *ir, int max, struct rate_meter *rate, struct contact *contact,
+static void poll_heart_rate(struct max30101_sample *samples, int max, struct rate_meter *rate, struct contact *contact,
 			    struct hr_status *st)
 {
 	bool lost = false;
-	int count = max30101_read_fifo(ir, max, &lost);
+	int count = max30101_read_fifo(samples, max, &lost);
 
 	if (count < 0) {
 		/* Logged once per failure run, since the loop retries every poll. */
@@ -472,13 +472,13 @@ static void poll_heart_rate(int32_t *ir, int max, struct rate_meter *rate, struc
 	for (int i = 0; i < count; i++) {
 		struct hr_estimate hr;
 
-		if (contact_update(contact, ir[i])) {
+		if (contact_update(contact, samples[i].ir)) {
 			heart_rate_init();
 			st->have_estimate = false;
 			st->contact_since_ms = k_uptime_get();
 		}
 
-		if (contact->on && heart_rate_process(ir[i], &hr)) {
+		if (contact->on && heart_rate_process(samples[i].ir, &hr)) {
 			st->hr = hr;
 			st->have_estimate = true;
 		}
@@ -487,7 +487,7 @@ static void poll_heart_rate(int32_t *ir, int max, struct rate_meter *rate, struc
 
 int main(void)
 {
-	static int32_t ir[MAX30101_FIFO_DEPTH];
+	static struct max30101_sample samples[MAX30101_FIFO_DEPTH];
 	struct rate_meter rate = {.hz = 0.0f};
 	struct contact contact = {.on = false};
 	struct hr_status status = {0};
@@ -565,7 +565,7 @@ int main(void)
 	if (status.sensor_ok) {
 		bool ignored;
 
-		(void)max30101_read_fifo(ir, ARRAY_SIZE(ir), &ignored);
+		(void)max30101_read_fifo(samples, ARRAY_SIZE(samples), &ignored);
 	}
 
 	heart_rate_init();
@@ -591,7 +591,7 @@ int main(void)
 
 	for (;;) {
 		if (status.sensor_ok) {
-			poll_heart_rate(ir, ARRAY_SIZE(ir), &rate, &contact, &status);
+			poll_heart_rate(samples, ARRAY_SIZE(samples), &rate, &contact, &status);
 		}
 
 		if (button_ok && button_pressed()) {

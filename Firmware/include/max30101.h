@@ -17,8 +17,15 @@
  */
 int max30101_init(void);
 
+/* One FIFO sample: both LED slots, taken in the same 10 ms period. */
+struct max30101_sample {
+	int32_t ir;
+	/* Ambient-cancelled level only; the red LED is off unless measuring SpO2. */
+	int32_t red;
+};
+
 /*
- * Read every new IR sample from the sensor FIFO, oldest first.
+ * Read every new sample from the sensor FIFO, oldest first.
  *
  * Only samples the sensor has actually produced are returned, so consecutive
  * samples are exactly 1/MAX30101_SAMPLE_RATE_HZ apart unless *lost is
@@ -27,7 +34,15 @@ int max30101_init(void);
  *
  * Returns the number of samples stored (0..max), or negative errno.
  */
-int max30101_read_fifo(int32_t *ir, int max, bool *lost);
+int max30101_read_fifo(struct max30101_sample *samples, int max, bool *lost);
+
+/*
+ * Set the red LED current, 0.2 mA per step (0 = off). Only the SpO2
+ * measurement lights it; heart rate uses IR.
+ *
+ * Returns 0 on success, negative errno on failure.
+ */
+int max30101_set_red_current(uint8_t pa);
 
 /*
  * Write back the settings the driver configured at start-up, empty the FIFO and

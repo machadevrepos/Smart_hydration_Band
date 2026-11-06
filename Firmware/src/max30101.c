@@ -16,14 +16,17 @@ BUILD_ASSERT(DT_NODE_EXISTS(MAX30101_NODE), "No okay maxim,max30101 node in devi
 
 /*
  * max30101_read_one() below and the heart-rate timing rely on this exact driver
- * configuration: one FIFO channel (IR) at 100 Hz.
+ * configuration: two FIFO channels, red then IR, at 100 Hz. IR carries heart
+ * rate; red is only lit during an SpO2 measurement (max30101_set_red_current()).
  */
 BUILD_ASSERT(DT_ENUM_HAS_VALUE(MAX30101_NODE, acq_mode, multi_led), "Multi-LED mode is required");
-BUILD_ASSERT(DT_PROP_BY_IDX(MAX30101_NODE, led_slot, 0) == 2 &&
-		     DT_PROP_BY_IDX(MAX30101_NODE, led_slot, 1) == 0 &&
+BUILD_ASSERT(DT_PROP_BY_IDX(MAX30101_NODE, led_slot, 0) == 1 &&
+		     DT_PROP_BY_IDX(MAX30101_NODE, led_slot, 1) == 2 &&
 		     DT_PROP_BY_IDX(MAX30101_NODE, led_slot, 2) == 0 &&
 		     DT_PROP_BY_IDX(MAX30101_NODE, led_slot, 3) == 0,
-	     "led-slot must be <2 0 0 0> (IR only)");
+	     "led-slot must be <1 2 0 0> (red, then IR)");
+BUILD_ASSERT(DT_PROP_BY_IDX(MAX30101_NODE, led_pa, 0) == 0,
+	     "Red LED must start off (led-pa[0] = 0); SpO2 turns it on when measuring");
 BUILD_ASSERT(DT_PROP(MAX30101_NODE, smp_sr) == MAX30101_SAMPLE_RATE_HZ &&
 		     DT_PROP(MAX30101_NODE, smp_ave) == 1,
 	     "MAX30101_SAMPLE_RATE_HZ must match smp-sr with no averaging");
@@ -115,8 +118,16 @@ int max30101_shutdown(void)
 	return i2c_reg_update_byte_dt(&max30101_i2c, REG_MODE_CONFIG, MODE_SHDN, MODE_SHDN);
 }
 
-/* Fetch one frame through the Zephyr driver. This pops one sample from the FIFO. */
-static int max30101_read_one(int32_t *ir)
+int max30101_set_red_current(uint8_t pa)
+{
+	return i2c_reg_write_byte_dt(&max30101_i2c, REG_LED1_PA, pa);
+}
+
+/*
+ * Fetch one frame through the Zephyr driver. This pops one sample from the
+ * FIFO, both slots (red and IR) in one I2C transfer.
+ */
+static int max30101_read_one(struct max30101_sample *sample)
 {
 	struct sensor_value value;
 	int ret;
@@ -130,19 +141,24 @@ static int max30101_read_one(int32_t *ir)
 	if (ret < 0) {
 		return ret;
 	}
+	sample->ir = value.val1;
 
-	*ir = value.val1;
+	ret = sensor_channel_get(max30101_dev, SENSOR_CHAN_RED, &value);
+	if (ret < 0) {
+		return ret;
+	}
+	sample->red = value.val1;
 
 	return 0;
 }
 
-int max30101_read_fifo(int32_t *ir, int max, bool *lost)
+int max30101_read_fifo(struct max30101_sample *samples, int max, bool *lost)
 {
 	uint8_t ptr[3];
 	int available;
 	int ret;
 
-	if (ir == NULL || lost == NULL || max <= 0) {
+	if (samples == NULL || lost == NULL || max <= 0) {
 		return -EINVAL;
 	}
 
@@ -169,7 +185,7 @@ int max30101_read_fifo(int32_t *ir, int max, bool *lost)
 	}
 
 	for (int i = 0; i < available; i++) {
-		ret = max30101_read_one(&ir[i]);
+		ret = max30101_read_one(&samples[i]);
 		if (ret < 0) {
 			return ret;
 		}

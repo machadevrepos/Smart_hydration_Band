@@ -36,12 +36,13 @@
 		reg = <0x57>;
 		status = "okay";
 		/*
-		 * IR only: it carries the wrist pulse on this board. Green cannot work
-		 * from the 3.3 V LED supply, and SpO2 will need red added back.
+		 * Slot 1 red, slot 2 IR. IR carries the wrist pulse and runs all the
+		 * time; red is for SpO2 and starts off (current 0), lit only during a
+		 * measurement. Green cannot work from the 3.3 V LED supply.
 		 */
 		acq-mode = "multi-led";
-		led-slot = <2 0 0 0>;
-		/* [red IR green], 0.2 mA/LSB: IR ~38 mA. */
+		led-slot = <1 2 0 0>;
+		/* [red IR green], 0.2 mA/LSB: red off, IR ~38 mA. */
 		led-pa = [00 C0 00];
 		/* 100 Hz, no on-chip averaging. */
 		smp-sr = <100>;

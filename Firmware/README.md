@@ -22,8 +22,8 @@ steps with the BMI270.
 
 The board target is `nrf52dk/nrf52832` with `boards/nrf52dk_nrf52832.overlay`.
 The MAX30101 driver in nRF Connect SDK v3.3.1 (Zephyr 4.3) takes its sensor
-settings from devicetree, so they are in the overlay: IR only (multi-LED mode,
-slot 1), 100 Hz, no averaging, 411 us pulse width (18-bit; the driver default is
+settings from devicetree, so they are in the overlay: red and IR (multi-LED mode,
+slots 1 and 2; red at 0 mA except during an SpO2 measurement), 100 Hz, no averaging, 411 us pulse width (18-bit; the driver default is
 69 us / 15-bit), IR LED current `0xC0` with a 62.5 pA/LSB ADC range. The
 older Kconfig-based driver copied in `Docs/MAX30101` does not match this SDK.
 A dedicated BMD-350 board definition can replace this later; the overlay keeps
@@ -305,7 +305,8 @@ without the motion part:
 - **IR only.** Green is normally best on the wrist, but the MAX30101 green LED
   needs a 4.5-5.5 V LED supply and this board gives it 3.3 V (see Hardware
   caveats). A wrist recording showed a clear IR pulse and no usable green, and
-  red is unused until SpO2 is added, so both are off to save power.
+  red is lit only during an SpO2 measurement, so green is off and red is at 0 mA
+  the rest of the time to save power.
 - **Band-pass 0.9-3 Hz**, decimate to 50 Hz. Chosen from a raw wrist recording
   (`Docs/Raw_logs.md`): the pulse is nearly a sine at 1.4 Hz with slow lines at
   0.2-0.7 Hz. Lower corners locked on half the rate; first-differencing, used
