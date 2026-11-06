@@ -48,6 +48,7 @@ Firmware/
 │   ├── ble_service.h                 BLE link to the app
 │   ├── battery.h                     battery measurement API
 │   ├── watchdog.h                    hardware watchdog API
+│   ├── storage.h                     flash storage API
 │   └── max30101.h                    sensor wrapper API
 ├── src/
 │   ├── main.c                        initialization and FIFO polling loop
@@ -60,7 +61,8 @@ Firmware/
 │   ├── band_mode.c                   mode, LED color and reminder timing
 │   ├── ble_service.c                 advertising, services, app commands
 │   ├── battery.c                     battery voltage to percent
-│   └── watchdog.c                    hardware watchdog, reset reason
+│   ├── watchdog.c                    hardware watchdog, reset reason
+│   └── storage.c                     settings and NVS in flash
 └── prj.conf
 ```
 
@@ -138,8 +140,13 @@ The band works with no app or pairing:
 
 | Mode | LED | Reminder |
 | --- | --- | --- |
-| Daily, at power-up | White | Double tap every 90 min |
-| Night | Green | Double tap every 35 min |
+| Daily, at power-up | White | Double tap every 90 min (default) |
+| Night | Green | Double tap every 35 min (default) |
+
+The app can set the mode and both intervals over BLE (see BLE). The intervals it
+sets, 1-240 minutes (the app offers 20, 30, 45 and 60), are saved in flash and
+kept through power-off; writing 0 restores a default. The mode is not kept
+through power-off: the band always powers up in Daily Mode, as specified.
 
 The reminders, LED, button and BLE do not depend on the sensors. If the
 MAX30101 does not start at power-up, the error is logged, the status line shows
@@ -153,13 +160,14 @@ on a supply dip, and lost its settings), the settings the driver wrote at
 start-up, read back once then, are written again and sampling restarts; this
 repeats every second until samples return, logged once.
 
-A button press switches mode, gives one buzz and restarts the interval. Each
-press and reminder prints a line over RTT. Intervals are the two values at the top of
-`include/app_config.h`, in seconds, with the motor timings just below them.
+A button press, or a mode change from the app, switches mode, gives one buzz and
+restarts the interval. A new interval from the app restarts the wait if it is the
+current mode's. Each press, app change and reminder prints a line over RTT. The
+default intervals are at the top of `include/app_config.h`, in minutes, with the
+motor timings just below them.
 
 Motor patterns run on the system work queue because the main loop must keep
-draining the sensor FIFO. Not implemented yet: app control of mode and interval,
-quiet hours (needs the time of day), and skipping reminders off the wrist.
+draining the sensor FIFO. Not implemented yet: skipping reminders off the wrist.
 
 The WS2812 uses Zephyr's `worldsemi,ws2812-spi` driver on SPIM2: MOSI on P0.25,
 SCK on P0.22 (unconnected, but the SPIM stalls without a clock pin). `APP_LED_LEVEL` in `include/app_config.h` sets the brightness.
@@ -203,8 +211,9 @@ the phone may choose differently.
 | Battery | Battery Level | `0x2A19` | Read, notify | 0-100 %, on change |
 | Device Information | Firmware Revision | `0x2A26` | Read | Firmware version string, for example `1.0.0` |
 | Umbra `1ab10000-fde9-42a3-ab5b-82416f9bca6e` | Steps | `1ab10001-...` | Read, notify | 32-bit little endian, on change |
-| | Mode | `1ab10002-...` | Read, notify | 1 byte: 0 Daily, 1 Night, on change |
+| | Mode | `1ab10002-...` | Read, write, notify | 1 byte: 0 Daily, 1 Night, on change. Write to switch |
 | | Haptic | `1ab10003-...` | Write | 1 byte: 1 fires the double tap |
+| | Intervals | `1ab10004-...` | Read, write | Daily then Night minutes, uint16 LE each, 1-240, 0 = default. Kept in flash |
 
 An app should subscribe, then read Battery, Steps and Mode once for their current
 values. The Umbra characteristic UUIDs share the service UUID's other digits.
@@ -361,5 +370,5 @@ Implemented: heart rate from IR at 1 Hz, BMI270 step counting, Daily and Night
 modes with the LED, button and haptic reminders, BLE services and haptic command,
 battery level, RTT output.
 
-Not implemented yet: SpO2, skin temperature, app control of mode and interval, flash logging, motion-artifact
+Not implemented yet: SpO2, skin temperature, flash logging, motion-artifact
 handling for heart rate, power management.

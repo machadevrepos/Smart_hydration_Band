@@ -15,6 +15,7 @@
 
 #include <bluetooth/services/nus.h>
 
+#include "band_mode.h"
 #include "ble_service.h"
 #include "haptic.h"
 
@@ -43,6 +44,10 @@ static struct bt_uuid_128 umbra_service_uuid = BT_UUID_INIT_128(UMBRA_UUID_VAL(0
 static struct bt_uuid_128 umbra_steps_uuid = BT_UUID_INIT_128(UMBRA_UUID_VAL(1));
 static struct bt_uuid_128 umbra_mode_uuid = BT_UUID_INIT_128(UMBRA_UUID_VAL(2));
 static struct bt_uuid_128 umbra_haptic_uuid = BT_UUID_INIT_128(UMBRA_UUID_VAL(3));
+static struct bt_uuid_128 umbra_intervals_uuid = BT_UUID_INIT_128(UMBRA_UUID_VAL(4));
+
+/* Intervals value: Daily then Night minutes, each uint16 little endian. */
+#define INTERVALS_LEN 4
 
 /*
  * The Nordic UART JSON line is for the current app, which reads nothing else.
@@ -126,6 +131,74 @@ static ssize_t read_mode(struct bt_conn *conn, const struct bt_gatt_attr *attr, 
 	return bt_gatt_attr_read(conn, attr, buf, len, offset, &value, sizeof(value));
 }
 
+/* The main loop applies it within ~40 ms and notifies the new mode within 1 s. */
+static ssize_t write_mode(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf,
+			  uint16_t len, uint16_t offset, uint8_t flags)
+{
+	ARG_UNUSED(conn);
+	ARG_UNUSED(attr);
+	ARG_UNUSED(flags);
+
+	if (offset != 0) {
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+	}
+	if (len != 1) {
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+	}
+
+	uint8_t value = *(const uint8_t *)buf;
+
+	if (value != UMBRA_MODE_DAILY && value != UMBRA_MODE_NIGHT) {
+		return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
+	}
+
+	printk("  BLE command: %s Mode\n", value == UMBRA_MODE_NIGHT ? "Night" : "Daily");
+	band_mode_request(value == UMBRA_MODE_NIGHT ? BAND_MODE_NIGHT : BAND_MODE_DAILY);
+
+	return len;
+}
+
+static ssize_t read_intervals(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
+			      uint16_t len, uint16_t offset)
+{
+	struct band_intervals iv;
+	uint8_t value[INTERVALS_LEN];
+
+	band_mode_get_intervals(&iv);
+	sys_put_le16(iv.daily_min, &value[0]);
+	sys_put_le16(iv.night_min, &value[2]);
+
+	return bt_gatt_attr_read(conn, attr, buf, len, offset, value, sizeof(value));
+}
+
+static ssize_t write_intervals(struct bt_conn *conn, const struct bt_gatt_attr *attr,
+			       const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
+{
+	ARG_UNUSED(conn);
+	ARG_UNUSED(attr);
+	ARG_UNUSED(flags);
+
+	if (offset != 0) {
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+	}
+	if (len != INTERVALS_LEN) {
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+	}
+
+	struct band_intervals iv = {
+		.daily_min = sys_get_le16(&((const uint8_t *)buf)[0]),
+		.night_min = sys_get_le16(&((const uint8_t *)buf)[2]),
+	};
+
+	if (band_mode_request_intervals(&iv) < 0) {
+		return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
+	}
+
+	printk("  BLE command: intervals Daily %u min, Night %u min (0 = default)\n",
+	       iv.daily_min, iv.night_min);
+	return len;
+}
+
 static ssize_t write_haptic(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf,
 			    uint16_t len, uint16_t offset, uint8_t flags)
 {
@@ -153,12 +226,16 @@ BT_GATT_SERVICE_DEFINE(umbra_svc,
 	BT_GATT_CHARACTERISTIC(&umbra_steps_uuid.uuid, BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
 			       BT_GATT_PERM_READ, read_steps, NULL, NULL),
 	BT_GATT_CCC(NULL, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
-	BT_GATT_CHARACTERISTIC(&umbra_mode_uuid.uuid, BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
-			       BT_GATT_PERM_READ, read_mode, NULL, NULL),
+	BT_GATT_CHARACTERISTIC(&umbra_mode_uuid.uuid,
+			       BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY,
+			       BT_GATT_PERM_READ | BT_GATT_PERM_WRITE, read_mode, write_mode, NULL),
 	BT_GATT_CCC(NULL, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 	BT_GATT_CHARACTERISTIC(&umbra_haptic_uuid.uuid,
 			       BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP,
 			       BT_GATT_PERM_WRITE, NULL, write_haptic, NULL),
+	BT_GATT_CHARACTERISTIC(&umbra_intervals_uuid.uuid, BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE,
+			       BT_GATT_PERM_READ | BT_GATT_PERM_WRITE, read_intervals,
+			       write_intervals, NULL),
 );
 
 /* Positions of the value attributes in umbra_svc, for notifying. */

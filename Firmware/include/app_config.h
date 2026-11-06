@@ -1,9 +1,13 @@
 #ifndef APP_CONFIG_H
 #define APP_CONFIG_H
 
-/* Water reminder intervals in seconds: Daily 90 min, Night 35 min. */
-#define APP_DAILY_REMINDER_S 5400
-#define APP_NIGHT_REMINDER_S 2100
+/*
+ * Default water reminder intervals in minutes: Daily 90, Night 35. The app can
+ * change them (1-240 min); the values it sets are kept in flash and replace
+ * these until it sets 0, which restores the default.
+ */
+#define APP_DAILY_REMINDER_MIN 90
+#define APP_NIGHT_REMINDER_MIN 35
 
 /* Reminder: two pulses with a gap. Button press: one buzz. All in ms. */
 #define APP_HAPTIC_TAP_MS     200

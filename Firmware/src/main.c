@@ -13,6 +13,7 @@
 #include "max30101.h"
 #include "status_led.h"
 #include "step_counter.h"
+#include "storage.h"
 #include "watchdog.h"
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
@@ -142,13 +143,32 @@ static void handle_button_press(uint32_t press)
 	       led_ret == 0 ? "" : " FAILED", interval / 60, interval % 60);
 }
 
-static void print_reminder(void)
+/* One line per thing band_mode_process() did. */
+static void print_mode_events(uint32_t events)
 {
 	unsigned int secs = (unsigned int)(k_uptime_get() / 1000);
-	uint32_t interval = band_mode_interval_s();
+	enum band_mode mode = band_mode_get();
+	uint32_t next_s = band_mode_next_reminder_s();
 
-	printk("  %02u:%02u   reminder: double tap (%s Mode), next in %u:%02u\n", secs / 60,
-	       secs % 60, band_mode_name(band_mode_get()), interval / 60, interval % 60);
+	if (events & BAND_EVENT_MODE_FROM_APP) {
+		printk("  %02u:%02u   app: %s Mode, LED %s, buzz\n", secs / 60, secs % 60,
+		       band_mode_name(mode), mode_led_name(mode));
+	}
+	if (events & BAND_EVENT_INTERVALS) {
+		struct band_intervals iv;
+
+		band_mode_get_intervals(&iv);
+		printk("  %02u:%02u   app: intervals Daily %u min, Night %u min%s\n", secs / 60,
+		       secs % 60, iv.daily_min, iv.night_min,
+		       (events & BAND_EVENT_SAVE_FAILED) ? ", NOT SAVED to flash" : ", saved");
+	}
+	if (events & BAND_EVENT_REMINDER) {
+		printk("  %02u:%02u   reminder: double tap (%s Mode)\n", secs / 60, secs % 60,
+		       band_mode_name(mode));
+	}
+
+	printk("  %02u:%02u   next reminder in %u:%02u\n", secs / 60, secs % 60, next_s / 60,
+	       next_s % 60);
 }
 
 /*
@@ -474,6 +494,12 @@ int main(void)
 		LOG_ERR("Haptic motor unavailable (%d)", ret);
 	}
 
+	/* Before band_mode_init(), which loads the app's intervals from it. */
+	ret = storage_init();
+	if (ret < 0) {
+		LOG_ERR("Flash storage unavailable, using defaults (%d)", ret);
+	}
+
 	/* Show the mode as soon as possible; resume it after a watchdog reset. */
 	led_ret = band_mode_init(watchdog_reset_kept_ram(), &mode_restored);
 
@@ -537,8 +563,10 @@ int main(void)
 			handle_button_press(button_presses);
 		}
 
-		if (band_mode_process()) {
-			print_reminder();
+		uint32_t events = band_mode_process();
+
+		if (events != 0) {
+			print_mode_events(events);
 		}
 
 		if (k_uptime_get() >= next_battery_ms) {
