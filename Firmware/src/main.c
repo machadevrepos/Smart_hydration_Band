@@ -50,6 +50,12 @@ BUILD_ASSERT(HR_SAMPLE_RATE_HZ == MAX30101_SAMPLE_RATE_HZ,
  * ends it. Either change restarts the estimator, because the step in the
  * signal would otherwise sit in its 8 s window and can look periodic.
  */
+/*
+ * No sample for this long while reads succeed means the MAX30101 stopped
+ * sampling (it makes one every 10 ms), so its settings are written back.
+ */
+#define SENSOR_STALL_MS 1000
+
 #define CONTACT_ON_SAMPLES 100
 #define CONTACT_OFF_SAMPLES 10
 
@@ -83,6 +89,9 @@ struct hr_status {
 	bool sensor_ok;
 	/* Consecutive failed FIFO reads; heart rate is paused while non-zero. */
 	uint32_t read_errors;
+	/* When the FIFO last gave a sample, to notice a sensor that stopped. */
+	int64_t last_sample_ms;
+	bool stall_reported;
 	int64_t contact_since_ms;
 	bool have_estimate;
 	struct hr_estimate hr;
@@ -377,8 +386,31 @@ static void poll_heart_rate(int32_t *ir, int max, struct rate_meter *rate, struc
 	if (st->read_errors != 0) {
 		LOG_INF("MAX30101 reads recovered after %u failures", st->read_errors);
 		st->read_errors = 0;
+		st->last_sample_ms = k_uptime_get();
 		rate_meter_restart(rate);
 		/* Samples from before the gap are not evenly spaced with the rest. */
+		return;
+	}
+
+	if (count > 0) {
+		st->last_sample_ms = k_uptime_get();
+		st->stall_reported = false;
+	} else if (k_uptime_get() - st->last_sample_ms > SENSOR_STALL_MS) {
+		/*
+		 * Answering but not sampling: the sensor reset itself (a supply dip
+		 * clears its settings). Write them back, retrying each period.
+		 */
+		int ret = max30101_restore();
+
+		if (!st->stall_reported) {
+			st->stall_reported = true;
+			LOG_WRN("MAX30101 stopped sampling, settings restored (%d)", ret);
+		}
+		st->last_sample_ms = k_uptime_get();
+		contact->on = false;
+		contact->count = 0;
+		st->have_estimate = false;
+		rate_meter_restart(rate);
 		return;
 	}
 
@@ -493,6 +525,7 @@ int main(void)
 		       led_ret == 0 ? "" : " FAILED", next_s / 60, next_s % 60);
 	}
 	rate_meter_restart(&rate);
+	status.last_sample_ms = k_uptime_get();
 
 	for (;;) {
 		if (status.sensor_ok) {

@@ -30,6 +30,15 @@ int max30101_init(void);
 int max30101_read_fifo(int32_t *ir, int max, bool *lost);
 
 /*
+ * Write back the settings the driver configured at start-up, empty the FIFO and
+ * restart sampling. For a sensor that reset on its own and stopped sampling.
+ *
+ * Returns 0 on success, -ENODATA if the settings could not be saved at start-up,
+ * or another negative errno.
+ */
+int max30101_restore(void);
+
+/*
  * Put the sensor in its shutdown mode before the band powers off. Works over
  * I2C even if the Zephyr driver did not start.
  *

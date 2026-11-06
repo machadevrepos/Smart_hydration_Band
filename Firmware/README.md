@@ -147,7 +147,11 @@ MAX30101 does not start at power-up, the error is logged, the status line shows
 later (loose connection, I2C fault), heart rate pauses with the status
 `heart-rate sensor not responding` and resumes, after contact is found again,
 when reads recover; the main loop goes on serving the button and reminders
-throughout. The first failure and the recovery are each logged once.
+throughout. The first failure and the recovery are each logged once. If the
+sensor keeps answering but makes no samples for 1 s (it reset itself, for example
+on a supply dip, and lost its settings), the settings the driver wrote at
+start-up, read back once then, are written again and sampling restarts; this
+repeats every second until samples return, logged once.
 
 A button press switches mode, gives one buzz and restarts the interval. Each
 press and reminder prints a line over RTT. Intervals are the two values at the top of
