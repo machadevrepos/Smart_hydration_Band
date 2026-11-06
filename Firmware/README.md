@@ -171,9 +171,17 @@ The nRF52832 hardware watchdog resets the band if it is not fed for 10 s.
 `main()` starts it first and feeds it on every loop pass (about every 40 ms),
 but only while the system work queue, which runs the motor patterns and the
 Bluetooth host, has also checked in within the last 5 s. A hang in either one,
-or a fatal error that halts the CPU, therefore ends in a reset back to Daily
-Mode with reminders running, instead of a silent band. The watchdog pauses
-while a debugger halts the CPU.
+or a fatal error that halts the CPU, therefore ends in a reset with reminders
+running, instead of a silent band. The watchdog pauses while a debugger halts
+the CPU.
+
+A reset that keeps RAM (watchdog, fatal error, software reset, debugger) resumes
+the same mode on the same reminder schedule: `band_mode.c` keeps the mode and
+the time to the next reminder in no-init RAM, each with its inverse as a check,
+and the start-up line says `(resumed after reset)`. Without this a Night session
+would silently drop to Daily after a reset, and a band that kept resetting would
+never reach a reminder. Power-on, brown-out and the power switch start fresh in
+Daily Mode.
 
 After every start the RTT output shows why the chip reset, for example
 `last reset: power-on` or `last reset: watchdog`. Any `watchdog` in a soak test

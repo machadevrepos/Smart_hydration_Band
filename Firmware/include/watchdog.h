@@ -1,6 +1,8 @@
 #ifndef WATCHDOG_H
 #define WATCHDOG_H
 
+#include <stdbool.h>
+
 /*
  * Hardware watchdog. The band's one job is to keep buzzing, so if the main loop
  * or the system work queue (motor patterns, Bluetooth host) stops, the chip
@@ -22,9 +24,15 @@ int watchdog_init(void);
 void watchdog_feed(void);
 
 /*
- * Why the chip last reset, as one word ("power-on", "watchdog", ...). Reads and
- * clears the reset reason, so call it once at start-up.
+ * Why the chip last reset, in a few words ("power-on", "watchdog", ...). The
+ * hardware reason is read and cleared on the first call and kept for later ones.
  */
 const char *watchdog_reset_cause(void);
+
+/*
+ * True when the last reset kept RAM contents (watchdog, fatal error, software
+ * reset, debugger), so state saved in no-init RAM before it can be trusted.
+ */
+bool watchdog_reset_kept_ram(void);
 
 #endif /* WATCHDOG_H */

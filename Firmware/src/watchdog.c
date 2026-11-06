@@ -95,14 +95,45 @@ void watchdog_feed(void)
 	(void)wdt_feed(wdt, channel);
 }
 
+/* The reset reason, read and cleared once; the register keeps old bits otherwise. */
+static uint32_t reset_cause(bool *known)
+{
+	static bool read;
+	static bool read_ok;
+	static uint32_t cause;
+
+	if (!read) {
+		read = true;
+		read_ok = hwinfo_get_reset_cause(&cause) == 0;
+		(void)hwinfo_clear_reset_cause();
+	}
+
+	*known = read_ok;
+	return cause;
+}
+
+bool watchdog_reset_kept_ram(void)
+{
+	bool known;
+	uint32_t cause = reset_cause(&known);
+
+	/*
+	 * RAM survives these resets on the nRF52. Power-on, brown-out and wake
+	 * from system off start from scratch.
+	 */
+	return known && (cause & (RESET_WATCHDOG | RESET_CPU_LOCKUP | RESET_SOFTWARE |
+				  RESET_PIN | RESET_DEBUG)) != 0 &&
+	       (cause & (RESET_BROWNOUT | RESET_POR | RESET_LOW_POWER_WAKE)) == 0;
+}
+
 const char *watchdog_reset_cause(void)
 {
-	uint32_t cause = 0;
+	bool known;
+	uint32_t cause = reset_cause(&known);
 
-	if (hwinfo_get_reset_cause(&cause) < 0) {
+	if (!known) {
 		return "unknown";
 	}
-	(void)hwinfo_clear_reset_cause();
 
 	/* Several bits can be set; report the most telling one. */
 	if (cause & RESET_WATCHDOG) {

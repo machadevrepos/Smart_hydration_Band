@@ -370,6 +370,7 @@ int main(void)
 	int64_t next_status_ms = STATUS_PERIOD_MS;
 	int64_t next_battery_ms = 0;
 	int wdt_ret;
+	bool mode_restored;
 	int ret;
 
 	/* First, so a hang anywhere from here on resets the band. */
@@ -390,8 +391,8 @@ int main(void)
 		LOG_ERR("Haptic motor unavailable (%d)", ret);
 	}
 
-	/* Show the mode as soon as possible. */
-	led_ret = band_mode_init();
+	/* Show the mode as soon as possible; resume it after a watchdog reset. */
+	led_ret = band_mode_init(watchdog_reset_kept_ram(), &mode_restored);
 
 	ret = button_init();
 	button_ok = ret == 0;
@@ -432,14 +433,13 @@ int main(void)
 		LOG_ERR("Watchdog unavailable, a hang will not reset the band (%d)", wdt_ret);
 	}
 
-	if (led_ret == 0) {
-		printk("  %s Mode, LED %s, next reminder in %u:%02u\n",
-		       band_mode_name(band_mode_get()), mode_led_name(band_mode_get()),
-		       band_mode_interval_s() / 60, band_mode_interval_s() % 60);
-	} else {
-		printk("  %s Mode, LED FAILED (%d), next reminder in %u:%02u\n",
-		       band_mode_name(band_mode_get()), led_ret, band_mode_interval_s() / 60,
-		       band_mode_interval_s() % 60);
+	{
+		uint32_t next_s = band_mode_next_reminder_s();
+		enum band_mode mode = band_mode_get();
+
+		printk("  %s Mode%s, LED %s%s, next reminder in %u:%02u\n", band_mode_name(mode),
+		       mode_restored ? " (resumed after reset)" : "", mode_led_name(mode),
+		       led_ret == 0 ? "" : " FAILED", next_s / 60, next_s % 60);
 	}
 	rate_meter_restart(&rate);
 
