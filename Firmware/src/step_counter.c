@@ -24,6 +24,8 @@ LOG_MODULE_REGISTER(step_counter, LOG_LEVEL_INF);
  */
 
 #define REG_CHIP_ID         0x00
+/* ACC_X, ACC_Y, ACC_Z, each 16-bit little endian. */
+#define REG_ACC_DATA        0x0C
 #define REG_INTERNAL_STATUS 0x21
 #define REG_FEAT_PAGE       0x2F
 #define REG_FEATURES        0x30
@@ -225,6 +227,21 @@ int step_counter_init(void)
 	}
 
 	return write_reg(REG_PWR_CONF, pwr_conf | PWR_CONF_ADV_SAVE);
+}
+
+int step_counter_read_accel(int16_t xyz[3])
+{
+	uint8_t rx[6];
+	int ret = i2c_burst_read_dt(&bmi270, REG_ACC_DATA, rx, sizeof(rx));
+
+	if (ret < 0) {
+		return ret;
+	}
+
+	xyz[0] = (int16_t)sys_get_le16(&rx[0]);
+	xyz[1] = (int16_t)sys_get_le16(&rx[2]);
+	xyz[2] = (int16_t)sys_get_le16(&rx[4]);
+	return 0;
 }
 
 int step_counter_shutdown(void)

@@ -19,6 +19,20 @@ int step_counter_init(void);
 int step_counter_read(uint32_t *steps);
 
 /*
+ * The accelerometer's reset range is +-8 g, so one g is this many counts. The
+ * firmware leaves the range at its reset value.
+ */
+#define STEP_COUNTER_ACCEL_PER_G 4096
+
+/*
+ * Read the latest acceleration on the three axes, in counts
+ * (STEP_COUNTER_ACCEL_PER_G per g). Used to tell whether the wrist is still.
+ *
+ * Returns 0 on success, negative errno on failure.
+ */
+int step_counter_read_accel(int16_t xyz[3]);
+
+/*
  * Turn the accelerometer off before the band powers off.
  *
  * Returns 0 on success, negative errno on failure.
