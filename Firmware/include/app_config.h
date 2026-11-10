@@ -71,7 +71,7 @@
  * warning and the band prints "SpO2 BENCH MODE" at start-up while it is on.
  * Set it to 0 for the delivered firmware.
  */
-#define APP_SPO2_BENCH_MODE 0
+#define APP_SPO2_BENCH_MODE 1
 
 #if APP_SPO2_BENCH_MODE
 #undef APP_SPO2_FIRST_S
