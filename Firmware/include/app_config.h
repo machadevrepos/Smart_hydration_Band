@@ -71,7 +71,7 @@
  * warning and the band prints "SpO2 BENCH MODE" at start-up while it is on.
  * Set it to 0 for the delivered firmware.
  */
-#define APP_SPO2_BENCH_MODE 1
+#define APP_SPO2_BENCH_MODE 0
 
 #if APP_SPO2_BENCH_MODE
 #undef APP_SPO2_FIRST_S
@@ -86,9 +86,11 @@
 
 /*
  * SpO2 = A - B * R, R being the ratio of ratios. 110 - 25 R is the textbook
- * starting point; it is NOT calibrated for this board and enclosure. Fit A and
- * B from R (printed over RTT) against a reference fingertip oximeter; see
- * "SpO2 calibration" in the README.
+ * formula. On the prototype at rest it gave R 0.44-0.48, so 98-99%, which is
+ * plausible, but it has not been checked against a reference oximeter: treat
+ * readings as an estimate (a few percent). To calibrate, fit A and B from R
+ * (printed over RTT) against a fingertip oximeter; see "SpO2 calibration" in
+ * the README.
  */
 #define APP_SPO2_CAL_A 110.0f
 #define APP_SPO2_CAL_B 25.0f

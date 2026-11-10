@@ -352,9 +352,13 @@ algorithm does. The thresholds are at the top of `src/spo2.c`.
 
 ### SpO2 calibration
 
-`A` and `B` in `include/app_config.h` are the textbook 110 and 25, **not**
-calibrated for this board, enclosure and LED wavelengths; until they are, the
-readings can be several percent off. To calibrate:
+`A` and `B` in `include/app_config.h` are the textbook 110 and 25. On the
+prototype, seated at rest, three measurements gave R 0.44-0.48 (six or seven of
+seven windows good, red/IR correlation 85-96%), so 98-99%: consistent and
+plausible for a healthy wearer, and the agreed target for this version is an
+estimate of that quality. The formula has **not** been checked against a
+reference oximeter for this board, enclosure and LED wavelengths, so readings can
+be a few percent off. To calibrate:
 
 1. Fix the MAX30101 VDD supply first (see Hardware caveats); calibration data
    taken with the sensor out of specification would have to be redone.
