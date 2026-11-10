@@ -319,7 +319,7 @@ before delivery.**
 **Method.** It follows the open-source RF algorithm for the MAX3010x
 (R. Fraczkiewicz, [MAX30102_by_RF](https://github.com/aromring/MAX30102_by_RF),
 the usual replacement for Maxim's RD117 reference code), with Maxim's published
-calibration curve, and three changes for a band worn loosely on the wrist rather
+calibration for the MAX30101, and three changes for a band worn loosely on the wrist rather
 than a fingertip pressed on the sensor:
 
 | | RF algorithm (fingertip) | This firmware (wrist) |
@@ -330,7 +330,7 @@ than a fingertip pressed on the sensor:
 | Pulse check | IR autocorrelation ratio >= 0.5 (the signal repeats at the pulse rate) | the same measure, from the heart-rate estimator: mean quality >= 65 over the window |
 | Valid R | 0.02-1.84 | 0.02-1.84 |
 | Result | one 4 s buffer | 4 s windows until six are good (at most twelve), pooled into one R |
-| SpO2 from R | -45.060 R² + 30.354 R + 94.845 | the same curve, held at its 100% peak below R 0.34, shown 80-100% |
+| SpO2 from R | -45.060 R² + 30.354 R + 94.845 (RD117, MAX30102) | 1.5958422 R² - 34.659664 R + 112.68987 (Maxim's MAX30101 calibration, MAX32664 default), shown 80-100% |
 
 Why the changes: a loose fit gives a smaller pulse and more noise, and the red
 pulse is the weaker one. With RF's RMS ratio, red noise raises R, so readings
@@ -393,15 +393,23 @@ of `src/spo2.c`.
 
 ### SpO2 calibration
 
-`A`, `B` and `C` in `include/app_config.h` are Maxim's published curve for the
-MAX3010x (the one behind its RD117 lookup table, also used by RF):
-SpO2 = -45.060 R² + 30.354 R + 94.845, which gives 99% at R 0.45, 98% at 0.55,
-94% at 0.70 and 90% at 0.80. On the prototype, seated and held firmly, five
-measurements gave R 0.44-0.52, so 98-99%: consistent and plausible for a healthy
-wearer, and the agreed target for this version is an estimate of that quality.
-The curve has **not** been checked against a reference oximeter for this board,
-enclosure and LED wavelengths, so readings can be a few percent off. To
-calibrate:
+`A`, `B` and `C` in `include/app_config.h` are the calibration Maxim (Analog
+Devices) publishes for the MAX30101, the default coefficients of its MAX32664
+sensor-hub firmware: SpO2 = 1.5958422 R² - 34.659664 R + 112.68987. It gives
+100% below R 0.37, 99% at 0.40, 97% at 0.45, 96% at 0.50, 92% at 0.60 and 86% at
+0.80.
+
+The RD117 curve (-45.060 R² + 30.354 R + 94.845, from Maxim's MAX30102 reference
+code and used by RF) was tried first. It peaks at R 0.34 and stays at 99-100% up
+to R 0.47. With the band worn well and a clean signal (red/IR correlation
+97-99%), two measurements gave R 0.427 and 0.433, so it showed 100% both times;
+with the MAX30101 curve the same R gives 98%.
+
+Neither curve has been checked against a reference oximeter for this board,
+enclosure and LED wavelengths, so readings can be a few percent off. The quickest
+check is a one-point offset: wear a fingertip oximeter on the same arm, take 3-4
+readings side by side, and if the band reads consistently higher or lower, change
+`C` by the average difference. A full calibration:
 
 1. Fix the MAX30101 VDD supply first (see Hardware caveats); calibration data
    taken with the sensor out of specification would have to be redone.

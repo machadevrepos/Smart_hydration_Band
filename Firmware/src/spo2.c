@@ -91,7 +91,8 @@ LOG_MODULE_REGISTER(spo2, LOG_LEVEL_INF);
  * Reported range. At rest, a wrist reading under 80% is far more likely a bad
  * signal than real, and showing it would alarm the wearer, so such a result
  * counts as an unstable signal and is retried instead of reported (R above
- * about 1.0 with the default curve). The default curve tops out at 100.
+ * about 1.0 with the default curve). Below R 0.37 the default curve passes 100
+ * and is shown as 100.
  */
 #define SPO2_MIN_PERCENT 80
 #define SPO2_MAX_PERCENT 100
@@ -311,16 +312,21 @@ static float median(float *v, int n)
 }
 
 /*
- * SpO2 from R with the calibration curve in app_config.h. Maxim's curve is a
- * downward parabola that peaks just under 100% at R 0.34; below that R it would
- * fall again, so it is held at the peak.
+ * SpO2 from R with the calibration curve in app_config.h (Maxim's MAX30101
+ * calibration by default), before the 80-100% limits.
  */
 static float spo2_from_ratio(float r)
 {
-	if (APP_SPO2_CAL_A < 0.0f) {
-		float peak = -APP_SPO2_CAL_B / (2.0f * APP_SPO2_CAL_A);
+	/*
+	 * SpO2 must fall as R rises. A quadratic only does that on one side of its
+	 * turning point, so R is held at that point beyond it: below it for a
+	 * downward curve such as RD117's (peak at R 0.34), above it for an upward
+	 * one such as the default (turning point at R 10.9, never reached).
+	 */
+	if (APP_SPO2_CAL_A != 0.0f) {
+		float turn = -APP_SPO2_CAL_B / (2.0f * APP_SPO2_CAL_A);
 
-		r = MAX(r, peak);
+		r = APP_SPO2_CAL_A < 0.0f ? MAX(r, turn) : MIN(r, turn);
 	}
 	return (APP_SPO2_CAL_A * r + APP_SPO2_CAL_B) * r + APP_SPO2_CAL_C;
 }

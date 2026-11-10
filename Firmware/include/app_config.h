@@ -85,19 +85,24 @@
 #endif
 
 /*
- * SpO2 = A * R^2 + B * R + C, R being the ratio of ratios. The default is
- * Maxim's published curve for the MAX3010x sensors, the one behind the lookup
- * table in Maxim's RD117 reference code (and SparkFun's port of it) and used by
- * the RF algorithm: -45.060 R^2 + 30.354 R + 94.845. It gives 99% at R 0.45,
- * 98% at 0.55, 94% at 0.70 and 90% at 0.80. It has not been checked against a
- * reference oximeter on this band: treat readings as an estimate (a few
- * percent). To calibrate, fit A, B and C from R (printed over RTT) against a
- * fingertip oximeter; see "SpO2 calibration" in the README. For a straight
- * line, set A to 0.
+ * SpO2 = A * R^2 + B * R + C, R being the ratio of ratios. The default is the
+ * calibration Maxim (Analog Devices) publishes for the MAX30101, the default
+ * coefficients of its MAX32664 sensor-hub firmware: 1.5958422 R^2 - 34.659664 R
+ * + 112.68987. It gives 100% below R 0.37, 99% at 0.40, 97% at 0.45, 96% at
+ * 0.50, 92% at 0.60 and 86% at 0.80.
+ *
+ * The RD117 curve (-45.060 R^2 + 30.354 R + 94.845, Maxim's MAX30102 reference
+ * code, also used by the RF algorithm) was tried first. It tops out at R 0.34
+ * and stays at 99-100% up to R 0.47, and this band at rest reads R 0.41-0.49
+ * with a clean signal, so it showed 100% every time.
+ *
+ * Neither has been checked against a reference oximeter on this band: treat
+ * readings as an estimate (a few percent). To calibrate, compare against a
+ * fingertip oximeter; see "SpO2 calibration" in the README.
  */
-#define APP_SPO2_CAL_A (-45.060f)
-#define APP_SPO2_CAL_B 30.354f
-#define APP_SPO2_CAL_C 94.845f
+#define APP_SPO2_CAL_A 1.5958422f
+#define APP_SPO2_CAL_B (-34.659664f)
+#define APP_SPO2_CAL_C 112.68987f
 
 /* Status LED level per color, 0-255. Current and brightness rise with it. */
 #define APP_LED_LEVEL 40

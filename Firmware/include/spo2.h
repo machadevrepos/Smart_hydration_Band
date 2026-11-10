@@ -19,7 +19,7 @@
  *
  *   R = (red AC / red DC) / (IR AC / IR DC)
  *
- * which Maxim's calibration curve turns into SpO2 (app_config.h). With too few
+ * which Maxim's MAX30101 calibration turns into SpO2 (app_config.h). With too few
  * good windows no value is reported. Each window prints a diagnostic line over
  * RTT.
  *
