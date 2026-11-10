@@ -293,6 +293,8 @@ static void print_header(void)
 {
 	printk("\n"
 	       "Smart Hydration Band, firmware " FIRMWARE_VERSION "\n"
+	       /* Shows at a glance whether the board runs the build just made. */
+	       "built " __DATE__ " " __TIME__ ", SpO2 method: RF + pulse check\n"
 	       "\n"
 	       "  time    heart rate    steps   status\n"
 	       "  -----   ----------   ------   ----------------------------\n");
