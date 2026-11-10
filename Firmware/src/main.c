@@ -639,6 +639,10 @@ int main(void)
 	printk("  last reset: %s\n", watchdog_reset_cause());
 	if (APP_SPO2_BENCH_MODE) {
 		printk("  SpO2 BENCH MODE: measuring back to back, not for delivery\n");
+	} else {
+		/* So a quiet first two minutes is not taken for a fault. */
+		printk("  SpO2: first check at %02d:%02d once worn, then every %d min\n",
+		       APP_SPO2_FIRST_S / 60, APP_SPO2_FIRST_S % 60, APP_SPO2_INTERVAL_S / 60);
 	}
 	printk("  time of day: %s\n", clock_known ? "kept through the reset"
 						 : "not set, no quiet hours until the app sets it");
