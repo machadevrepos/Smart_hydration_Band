@@ -416,7 +416,7 @@ static ssize_t read_spo2(struct bt_conn *conn, const struct bt_gatt_attr *attr, 
 	return bt_gatt_attr_read(conn, attr, buf, len, offset, value, sizeof(value));
 }
 
-/* Write 1 to measure now; the result is notified when it is done (~35 s). */
+/* Write 1 to measure now; the result is notified when it is done (30-55 s). */
 static ssize_t write_spo2(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf,
 			  uint16_t len, uint16_t offset, uint8_t flags)
 {

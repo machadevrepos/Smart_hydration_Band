@@ -216,7 +216,7 @@ Format version 1 (firmware 1.0.0) had 16-byte records without the SpO2 bytes.
 
 ### 2.11 SpO2 (`1ab10009`)
 
-SpO2 is measured in **spot checks**, the way wrist devices do it: about 35 seconds
+SpO2 is measured in **spot checks**, the way wrist devices do it: 30-55 seconds
 with the wrist still, every 30 minutes while the band is worn, 5 minutes after an
 attempt that failed, and whenever the app asks. It is a wellness estimate, not a
 medical reading.
@@ -236,7 +236,7 @@ medical reading.
 | --- | --- |
 | `0` | No measurement yet |
 | `1` | OK: byte 1 is a fresh reading |
-| `2` | Measuring now (about 35 s) |
+| `2` | Measuring now (30-55 s) |
 | `3` | Not on the skin |
 | `4` | Too much movement: ask the user to keep still |
 | `5` | Pulse too weak |
@@ -428,7 +428,7 @@ nothing to the band. To use this interface:
 | --- | --- |
 | No app ever connected | Daily Mode, white LED, double tap every 90 min. Button switches to Night (green, every 35 min) and back. No quiet hours (no time). Log keeps recording. |
 | App connected | The same, plus live data and app control. |
-| Worn | SpO2 spot check every 30 min (about 35 s, keep still); the red LED is lit only then. |
+| Worn | SpO2 spot check every 30 min (30-55 s, keep still); the red LED is lit only then. |
 | App disconnects | Keeps going on its own, keeps logging, advertises again. |
 | Band reset by its watchdog | Comes back within ~10 s in the same mode, same reminder schedule, same time. |
 | Battery under ~5% | Saves the log, switches off (LED dark). Charge, then press the button. |

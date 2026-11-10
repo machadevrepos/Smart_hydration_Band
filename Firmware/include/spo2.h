@@ -9,16 +9,19 @@
 #include "max30101.h"
 
 /*
- * SpO2 spot checks from the MAX30101 red and IR channels. A measurement takes
- * about 35 s with the wrist still: the red LED is turned on and its current
- * adjusted, then seven 4 s windows are measured and the ratio of ratios
+ * SpO2 spot checks from the MAX30101 red and IR channels, after the
+ * open-source RF algorithm for the MAX3010x with changes for a loosely worn
+ * wrist band. A measurement takes 30-55 s with the wrist still: the red LED is
+ * turned on and its current adjusted, then 4 s windows are measured until six
+ * are good (at most twelve). Windows with movement, a weak pulse or red and IR
+ * pulses that do not match are thrown out; the good ones are pooled into one
+ * ratio of ratios
  *
  *   R = (red AC / red DC) / (IR AC / IR DC)
  *
- * is converted with SpO2 = A - B * R (A and B in app_config.h, to be fitted
- * against a reference oximeter). Windows with movement, a weak pulse or red and
- * IR pulses that do not match are thrown out; with too few good windows no
- * value is reported. Each window prints a diagnostic line over RTT.
+ * which Maxim's calibration curve turns into SpO2 (app_config.h). With too few
+ * good windows no value is reported. Each window prints a diagnostic line over
+ * RTT.
  *
  * Measurements run every APP_SPO2_INTERVAL_S seconds while the band is worn,
  * sooner after a failed attempt, and on request from the app.
@@ -44,9 +47,9 @@ struct spo2_result {
 	enum spo2_status status;
 	/* Last valid SpO2 in percent, 0 if there has been none. */
 	uint8_t percent;
-	/* 0-100 for that reading: share of good windows times red/IR match. */
+	/* 0-100 for that reading: share of windows used times red/IR correlation. */
 	uint8_t quality;
-	/* Latest attempt's median R times 1000, 0 if no window was good (calibration). */
+	/* Latest attempt's R times 1000, 0 if no window was good (calibration). */
 	uint16_t ratio_milli;
 	/* k_uptime_get() of the last valid reading, 0 if none. */
 	int64_t uptime_ms;

@@ -26,10 +26,18 @@ LOG_MODULE_REGISTER(spo2, LOG_LEVEL_INF);
 #define AGC_MAX_ROUNDS        3
 #define SETTLE_SAMPLES        200 /* Filters settle before the first window. */
 #define WINDOW_SAMPLES        400 /* One 4 s window, several beats. */
-#define WINDOW_COUNT          7
+/*
+ * Windows are measured until TARGET_GOOD_WINDOWS are good (about 30 s on a
+ * still, well-fitted wrist) or MAX_WINDOWS have been measured (about 55 s, for a
+ * loose fit that rejects some). Fewer than MIN_GOOD_WINDOWS good gives no value.
+ */
+#define MAX_WINDOWS           12
+#define TARGET_GOOD_WINDOWS   6
 #define MIN_GOOD_WINDOWS      4
+/* Give up early when this many windows are done and fewer than 2 were good. */
+#define GIVE_UP_WINDOWS       5
 /* A measurement that has not finished by then has lost its samples. */
-#define TIMEOUT_MS            75000
+#define TIMEOUT_MS            80000
 
 /* Red LED current, 0.2 mA per step: start at ~19 mA, aim for this ADC level. */
 #define RED_PA_START  0x60
@@ -44,25 +52,36 @@ LOG_MODULE_REGISTER(spo2, LOG_LEVEL_INF);
 #define DC_MAX 250000.0f
 
 /*
- * Window acceptance. The wrist pulse on this board is small (IR AC about 100
- * ppm of DC at rest), so the perfusion floor is low; tune it from the RTT
- * diagnostics.
+ * Window acceptance. The method follows R. Fraczkiewicz's open-source
+ * MAX30102 algorithm ("MAX30102_by_RF", the usual replacement for Maxim's
+ * RD117 reference code): DC is the mean, the pulse is taken from the detrended
+ * (here band-passed) signal, and red and IR must correlate (Pearson). RF asks
+ * for 0.8 on a fingertip. A wrist in a loose enclosure correlates less, so a
+ * window needs 0.70 here, and the result is not taken from any single window
+ * but pooled over all good ones (see conclude()), which averages the noise
+ * that a lower threshold lets in.
+ *
+ * The wrist pulse on this board is small (IR AC 150-280 ppm of DC at rest held
+ * firmly, less when loose), so the perfusion floor is low.
  */
-#define MIN_CORRELATION 0.80f   /* Red and IR pulses must move together. */
-#define MIN_PERFUSION   0.00003f /* AC/DC, 30 ppm. */
-#define MAX_MOTION_MG   100     /* Largest swing on any axis within a window. */
+#define MIN_CORRELATION 0.70f    /* Red and IR pulses must move together. */
+#define MIN_PERFUSION   0.00002f /* AC/DC, 20 ppm. */
+#define MAX_MOTION_MG   100      /* Largest swing on any axis within a window. */
+/* Valid R range, as in the RF algorithm (0.02-1.84). */
+#define RATIO_MIN       0.02f
+#define RATIO_MAX       1.84f
 /*
- * At least MIN_GOOD_WINDOWS good windows must lie within this share of their
- * median R. 10% rejected a seated wrist recording whose seven windows were all
- * good (R 0.36-0.53, median 0.44); 20% keeps six of them.
+ * Good windows further than this share from the median R are left out of the
+ * pooled result (a window can pass the checks and still carry an artifact).
+ * At least MIN_GOOD_WINDOWS must remain.
  */
-#define AGREE_FRACTION  0.20f
+#define AGREE_FRACTION  0.30f
 
 /*
  * Reported range. At rest, a wrist reading under 80% is far more likely a bad
  * signal than real, and showing it would alarm the wearer, so such a result
- * counts as an unstable signal and is retried instead of reported. Above 100
- * (R below 0.4 with the default formula) is shown as 100.
+ * counts as an unstable signal and is retried instead of reported (R above
+ * about 1.0 with the default curve). The default curve tops out at 100.
  */
 #define SPO2_MIN_PERCENT 80
 #define SPO2_MAX_PERCENT 100
@@ -131,8 +150,16 @@ static struct {
 	int16_t accel_max[3];
 } acc;
 
-static float window_ratio[WINDOW_COUNT];
-static float window_corr[WINDOW_COUNT];
+/*
+ * Each good window: its R, and its DC-normalized sums (red x IR, IR^2, red^2,
+ * pulse parts only) so the windows can be pooled into one estimate.
+ */
+static struct {
+	float ratio;
+	double sxy;
+	double sxx;
+	double syy;
+} good[MAX_WINDOWS];
 static int good_windows;
 static int rejects[4];
 
@@ -266,8 +293,23 @@ static float median(float *v, int n)
 	return (n % 2) ? v[n / 2] : 0.5f * (v[n / 2 - 1] + v[n / 2]);
 }
 
+/*
+ * SpO2 from R with the calibration curve in app_config.h. Maxim's curve is a
+ * downward parabola that peaks just under 100% at R 0.34; below that R it would
+ * fall again, so it is held at the peak.
+ */
+static float spo2_from_ratio(float r)
+{
+	if (APP_SPO2_CAL_A < 0.0f) {
+		float peak = -APP_SPO2_CAL_B / (2.0f * APP_SPO2_CAL_A);
+
+		r = MAX(r, peak);
+	}
+	return (APP_SPO2_CAL_A * r + APP_SPO2_CAL_B) * r + APP_SPO2_CAL_C;
+}
+
 /* End the measurement: red LED off, result stored, next one scheduled. */
-static void finish(enum spo2_status status, float ratio, float corr_mean)
+static void finish(enum spo2_status status, float ratio, uint8_t quality)
 {
 	int64_t now = k_uptime_get();
 
@@ -279,13 +321,11 @@ static void finish(enum spo2_status status, float ratio, float corr_mean)
 	result.status = status;
 	result.ratio_milli = ratio > 0.0f ? (uint16_t)MIN(ratio * 1000.0f + 0.5f, 65535.0f) : 0;
 	if (status == SPO2_STATUS_OK) {
-		float spo2 = APP_SPO2_CAL_A - APP_SPO2_CAL_B * ratio;
+		float spo2 = CLAMP(spo2_from_ratio(ratio), (float)SPO2_MIN_PERCENT,
+				   (float)SPO2_MAX_PERCENT);
 
-		spo2 = CLAMP(spo2, (float)SPO2_MIN_PERCENT, (float)SPO2_MAX_PERCENT);
 		result.percent = (uint8_t)(spo2 + 0.5f);
-		result.quality = (uint8_t)CLAMP(100.0f * good_windows / WINDOW_COUNT * corr_mean +
-							0.5f,
-						0.0f, 100.0f);
+		result.quality = quality;
 		result.uptime_ms = now;
 	}
 	k_spin_unlock(&result_lock, key);
@@ -296,7 +336,20 @@ static void finish(enum spo2_status status, float ratio, float corr_mean)
 	pending_events |= SPO2_EVENT_DONE;
 }
 
-/* Judge one 4 s window and keep its R if it is good. */
+/*
+ * Judge one 4 s window and keep it if it is good.
+ *
+ * R is the ratio of ratios (red AC/DC) / (IR AC/DC). RF and Maxim take each AC
+ * as the RMS (or peak-to-peak) of its own channel, so noise in the red channel,
+ * which has the weaker pulse, adds to red AC and pushes R up and SpO2 down as
+ * the fit gets looser. Here red AC is instead the part of the red pulse that
+ * follows the IR pulse: the least-squares slope of red against IR,
+ *
+ *   R = (sum red*IR / sum IR^2) * (DC IR / DC red),
+ *
+ * which equals the RMS ratio for a clean signal (correlation 1) and is not
+ * raised by red noise. The RMS-based R is printed too, for comparison.
+ */
 static void close_window(void)
 {
 	float n = (float)WINDOW_SAMPLES;
@@ -308,7 +361,10 @@ static void close_window(void)
 	float corr = denom > 0.0f ? (float)(acc.red_ir / denom) : 0.0f;
 	float pi_red = dc_red > 0.0f ? ac_red / dc_red : 0.0f;
 	float pi_ir = dc_ir > 0.0f ? ac_ir / dc_ir : 0.0f;
-	float ratio = pi_ir > 0.0f ? pi_red / pi_ir : 0.0f;
+	float ratio_rms = pi_ir > 0.0f ? pi_red / pi_ir : 0.0f;
+	float ratio = (acc.ir2 > 0.0 && dc_red > 0.0f)
+			      ? (float)(acc.red_ir / acc.ir2) * dc_ir / dc_red
+			      : 0.0f;
 	int motion_mg = -1;
 	enum reject why = REJECT_NONE;
 
@@ -326,33 +382,54 @@ static void close_window(void)
 	} else if (dc_red < DC_MIN || dc_red > DC_MAX || dc_ir < DC_MIN || dc_ir > DC_MAX ||
 		   pi_red < MIN_PERFUSION || pi_ir < MIN_PERFUSION) {
 		why = REJECT_WEAK;
-	} else if (corr < MIN_CORRELATION) {
+	} else if (corr < MIN_CORRELATION || ratio < RATIO_MIN || ratio > RATIO_MAX) {
 		why = REJECT_UNSTABLE;
 	}
 
+	/*
+	 * Out of range only on a rejected window: bound it so the line stays readable
+	 * (a negative R or a huge one from a near-flat IR window).
+	 */
+	ratio = CLAMP(ratio, 0.0f, 99.0f);
+	ratio_rms = CLAMP(ratio_rms, 0.0f, 99.0f);
+	corr = MAX(corr, 0.0f);
+
 	/* One line per window: what calibration and threshold tuning need. */
-	printk("  SpO2 window %d: R %d.%03d, PI red %d ppm, IR %d ppm, corr %d%%, move %d mg, "
-	       "DC red %d IR %d, %s\n",
-	       window_index + 1, (int)ratio, (int)(ratio * 1000.0f) % 1000, (int)(pi_red * 1e6f),
-	       (int)(pi_ir * 1e6f), (int)(corr * 100.0f), motion_mg, (int)dc_red, (int)dc_ir,
+	printk("  SpO2 window %d: R %d.%03d (RMS %d.%03d), PI red %d ppm, IR %d ppm, corr %d%%, "
+	       "move %d mg, DC red %d IR %d, %s\n",
+	       window_index + 1, (int)ratio, (int)(ratio * 1000.0f) % 1000, (int)ratio_rms,
+	       (int)(ratio_rms * 1000.0f) % 1000, (int)(pi_red * 1e6f), (int)(pi_ir * 1e6f),
+	       (int)(corr * 100.0f), motion_mg, (int)dc_red, (int)dc_ir,
 	       why == REJECT_NONE     ? "good"
 	       : why == REJECT_MOTION ? "rejected: movement"
 	       : why == REJECT_WEAK   ? "rejected: weak or out of range"
 				      : "rejected: red and IR differ");
 
 	rejects[why]++;
-	if (why == REJECT_NONE) {
-		window_ratio[good_windows] = ratio;
-		window_corr[good_windows] = corr;
+	if (why == REJECT_NONE && good_windows < MAX_WINDOWS) {
+		double norm_xy = (double)dc_red * dc_ir;
+		double norm_xx = (double)dc_ir * dc_ir;
+		double norm_yy = (double)dc_red * dc_red;
+
+		good[good_windows].ratio = ratio;
+		good[good_windows].sxy = acc.red_ir / norm_xy;
+		good[good_windows].sxx = acc.ir2 / norm_xx;
+		good[good_windows].syy = acc.red2 / norm_yy;
 		good_windows++;
 	}
 }
 
-/* After the last window: decide the result. */
+/*
+ * After the last window: decide the result. The good windows near the median R
+ * are pooled into one least-squares fit of red against IR, which weights each
+ * window by the strength of its pulse and gives one R from 16-50 s of signal,
+ * steadier than the median of separate 4 s estimates.
+ */
 static void conclude(void)
 {
 	if (good_windows < MIN_GOOD_WINDOWS) {
 		enum spo2_status status = SPO2_STATUS_UNSTABLE;
+		float sorted[MAX_WINDOWS];
 
 		if (rejects[REJECT_MOTION] >= rejects[REJECT_WEAK] &&
 		    rejects[REJECT_MOTION] >= rejects[REJECT_UNSTABLE]) {
@@ -360,45 +437,65 @@ static void conclude(void)
 		} else if (rejects[REJECT_WEAK] >= rejects[REJECT_UNSTABLE]) {
 			status = SPO2_STATUS_WEAK;
 		}
-		finish(status, good_windows > 0 ? median(window_ratio, good_windows) : 0.0f, 0.0f);
+		for (int i = 0; i < good_windows; i++) {
+			sorted[i] = good[i].ratio;
+		}
+		printk("  SpO2 summary: %d of %d windows good (moved %d, weak %d, red/IR differ %d)\n",
+		       good_windows, window_index, rejects[REJECT_MOTION], rejects[REJECT_WEAK],
+		       rejects[REJECT_UNSTABLE]);
+		finish(status, good_windows > 0 ? median(sorted, good_windows) : 0.0f, 0);
 		return;
 	}
 
-	float sorted[WINDOW_COUNT];
+	float sorted[MAX_WINDOWS];
 
 	for (int i = 0; i < good_windows; i++) {
-		sorted[i] = window_ratio[i];
+		sorted[i] = good[i].ratio;
 	}
-	float r = median(sorted, good_windows);
-	float spread = r > 0.0f ? (sorted[good_windows - 1] - sorted[0]) / r : 0.0f;
+	float r_med = median(sorted, good_windows);
+	float spread = r_med > 0.0f ? (sorted[good_windows - 1] - sorted[0]) / r_med : 0.0f;
+	double sxy = 0.0;
+	double sxx = 0.0;
+	double syy = 0.0;
 	int agree = 0;
-	float corr_sum = 0.0f;
 
 	for (int i = 0; i < good_windows; i++) {
-		if (fabsf(window_ratio[i] - r) <= AGREE_FRACTION * r) {
+		if (fabsf(good[i].ratio - r_med) <= AGREE_FRACTION * r_med) {
+			sxy += good[i].sxy;
+			sxx += good[i].sxx;
+			syy += good[i].syy;
 			agree++;
 		}
-		corr_sum += window_corr[i];
 	}
+
+	float r = sxx > 0.0 ? (float)(sxy / sxx) : 0.0f;
+	float corr = (sxx > 0.0 && syy > 0.0) ? (float)(sxy / sqrt(sxx * syy)) : 0.0f;
+
+	corr = MAX(corr, 0.0f);
 
 	/* The whole measurement on one line, for calibration notes. */
-	printk("  SpO2 summary: %d of %d windows good, %d agree, median R %d.%03d, spread %d%%\n",
-	       good_windows, WINDOW_COUNT, agree, (int)r, (int)(r * 1000.0f) % 1000,
-	       (int)(spread * 100.0f + 0.5f));
+	printk("  SpO2 summary: %d of %d windows good, %d pooled, R %d.%03d (median %d.%03d, "
+	       "spread %d%%), corr %d%%\n",
+	       good_windows, window_index, agree, (int)r, (int)(r * 1000.0f) % 1000, (int)r_med,
+	       (int)(r_med * 1000.0f) % 1000, (int)(spread * 100.0f + 0.5f),
+	       (int)(corr * 100.0f));
 
-	if (agree < MIN_GOOD_WINDOWS) {
-		finish(SPO2_STATUS_UNSTABLE, r, 0.0f);
+	if (agree < MIN_GOOD_WINDOWS || r < RATIO_MIN || r > RATIO_MAX) {
+		finish(SPO2_STATUS_UNSTABLE, r_med, 0);
 		return;
 	}
 
-	if (APP_SPO2_CAL_A - APP_SPO2_CAL_B * r < SPO2_MIN_PERCENT) {
+	if (spo2_from_ratio(r) < SPO2_MIN_PERCENT) {
 		printk("  SpO2 below %d%% at R %d.%03d: treated as an unstable signal\n",
 		       SPO2_MIN_PERCENT, (int)r, (int)(r * 1000.0f) % 1000);
-		finish(SPO2_STATUS_UNSTABLE, r, 0.0f);
+		finish(SPO2_STATUS_UNSTABLE, r, 0);
 		return;
 	}
 
-	finish(SPO2_STATUS_OK, r, corr_sum / good_windows);
+	/* Share of measured windows that were used, times how well red and IR matched. */
+	float quality = 100.0f * (float)agree / (float)window_index * corr;
+
+	finish(SPO2_STATUS_OK, r, (uint8_t)CLAMP(quality + 0.5f, 0.0f, 100.0f));
 }
 
 static void start(int64_t now)
@@ -414,7 +511,7 @@ static void start(int64_t now)
 	started_ms = now;
 
 	if (set_red(last_good_pa) < 0) {
-		finish(SPO2_STATUS_SENSOR, 0.0f, 0.0f);
+		finish(SPO2_STATUS_SENSOR, 0.0f, 0);
 		return;
 	}
 
@@ -438,7 +535,7 @@ static void agc_done(void)
 		agc_rounds++;
 		if (pa != red_pa) {
 			if (set_red(pa) < 0) {
-				finish(SPO2_STATUS_SENSOR, 0.0f, 0.0f);
+				finish(SPO2_STATUS_SENSOR, 0.0f, 0);
 				return;
 			}
 			sample_count = 0;
@@ -498,12 +595,13 @@ void spo2_add_sample(const struct max30101_sample *s)
 			clear_sums();
 			window_index++;
 			/*
-			 * Stop as soon as the result is settled: all windows done, or too
-			 * many rejected for MIN_GOOD_WINDOWS to be reachable (keeps the red
-			 * LED from burning 35 s on a wrist that keeps moving).
+			 * Stop as soon as the result is settled: enough good windows, all
+			 * windows done, or too many rejected to be worth going on (keeps
+			 * the red LED from burning on a wrist that keeps moving).
 			 */
-			if (window_index >= WINDOW_COUNT ||
-			    good_windows + (WINDOW_COUNT - window_index) < MIN_GOOD_WINDOWS) {
+			if (good_windows >= TARGET_GOOD_WINDOWS || window_index >= MAX_WINDOWS ||
+			    good_windows + (MAX_WINDOWS - window_index) < MIN_GOOD_WINDOWS ||
+			    (window_index >= GIVE_UP_WINDOWS && good_windows < 2)) {
 				conclude();
 			}
 		}
@@ -518,7 +616,7 @@ void spo2_add_sample(const struct max30101_sample *s)
 void spo2_sensor_gap(void)
 {
 	if (state != STATE_IDLE) {
-		finish(SPO2_STATUS_SENSOR, 0.0f, 0.0f);
+		finish(SPO2_STATUS_SENSOR, 0.0f, 0);
 	}
 }
 
@@ -551,13 +649,13 @@ uint32_t spo2_process(const struct spo2_inputs *in)
 		if (asked || now >= next_due_ms) {
 			if (!sensor_ok) {
 				if (asked) {
-					finish(SPO2_STATUS_SENSOR, 0.0f, 0.0f);
+					finish(SPO2_STATUS_SENSOR, 0.0f, 0);
 				}
 				next_due_ms = now + (int64_t)APP_SPO2_INTERVAL_S * 1000;
 			} else if (!in->contact) {
 				/* Asked: answer at once. Scheduled: look again shortly. */
 				if (asked) {
-					finish(SPO2_STATUS_NO_CONTACT, 0.0f, 0.0f);
+					finish(SPO2_STATUS_NO_CONTACT, 0.0f, 0);
 				} else {
 					next_due_ms = now + (int64_t)APP_SPO2_WAIT_S * 1000;
 				}
@@ -569,9 +667,9 @@ uint32_t spo2_process(const struct spo2_inputs *in)
 			}
 		}
 	} else if (!in->contact) {
-		finish(SPO2_STATUS_NO_CONTACT, 0.0f, 0.0f);
+		finish(SPO2_STATUS_NO_CONTACT, 0.0f, 0);
 	} else if (now - started_ms > TIMEOUT_MS) {
-		finish(SPO2_STATUS_SENSOR, 0.0f, 0.0f);
+		finish(SPO2_STATUS_SENSOR, 0.0f, 0);
 	} else {
 		track_motion(in);
 	}

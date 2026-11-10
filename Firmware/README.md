@@ -316,49 +316,80 @@ every 45 s. The red LED is then lit most of the time. While it is on, the build
 prints a warning and the band prints `SpO2 BENCH MODE` at start-up. **Set it to 0
 before delivery.**
 
-**How, about 35 s.** The red LED (off otherwise) is turned on and its current
+**Method.** It follows the open-source RF algorithm for the MAX3010x
+(R. Fraczkiewicz, [MAX30102_by_RF](https://github.com/aromring/MAX30102_by_RF),
+the usual replacement for Maxim's RD117 reference code), with Maxim's published
+calibration curve, and three changes for a band worn loosely on the wrist rather
+than a fingertip pressed on the sensor:
+
+| | RF algorithm (fingertip) | This firmware (wrist) |
+|---|---|---|
+| DC | mean | mean |
+| Pulse (AC) | RMS of the linearly detrended signal | 0.9-3 Hz band-pass (as heart rate), then a least-squares fit of red against IR |
+| Signal check | red/IR Pearson correlation >= 0.8 | >= 0.70 per window, plus movement (accelerometer), level and perfusion checks |
+| Valid R | 0.02-1.84 | 0.02-1.84 |
+| Result | one 4 s buffer | 4 s windows until six are good (at most twelve), pooled into one R |
+| SpO2 from R | -45.060 R² + 30.354 R + 94.845 | the same curve, held at its 100% peak below R 0.34, shown 80-100% |
+
+Why the changes: a loose fit gives a smaller pulse and more noise, and the red
+pulse is the weaker one. With RF's RMS ratio, red noise raises R, so readings
+drift down (and fail the 0.8 check) as the fit loosens. The fit of red against
+IR only counts the part of the red signal that moves with the IR pulse, so noise
+does not bias R. Pooling the good windows of a measurement, each weighted by
+the strength of its pulse, then averages out the extra noise that the lower
+correlation threshold lets in.
+
+**How, 30-55 s.** The red LED (off otherwise) is turned on and its current
 adjusted so the red level sits near 120000 counts. After 2 s for the filters to
-settle, seven 4 s windows are measured. In each, DC is the mean and AC the RMS
-after the same 0.9-3 Hz band-pass as heart rate, and
+settle, 4 s windows are measured. In each, DC is the mean of each channel and
 
-    R = (red AC / red DC) / (IR AC / IR DC)
+    R = (sum red x IR / sum IR²) x (IR DC / red DC)
 
-A window is rejected for more than 100 mg of movement on any axis (BMI270), a DC
-level outside 20000-250000, a perfusion index (AC/DC) under 30 ppm on either
-channel, or red and IR pulses that correlate under 0.80. With at least four good
-windows that agree within 20% of their median R, SpO2 = A - B x R, shown as
-80-100%, with a quality score (good windows x mean correlation). A result under
-80% is treated as an unstable signal and retried rather than reported: at rest
-it is far more likely a bad wrist signal than real. A measurement stops early
-once too many windows are rejected for four good ones to be possible, so the
-red LED is not kept on for a wrist that keeps moving. Otherwise no
-value is reported, and the result line gives the reason (movement, weak pulse,
-unstable signal, off the wrist).
+on the band-passed signals, the ratio of ratios (red AC/DC) / (IR AC/DC) with the
+red AC taken as the part that follows IR. A window is rejected for more than
+100 mg of movement on any axis (BMI270), a DC level outside 20000-250000, a
+perfusion index (AC/DC) under 20 ppm on either channel, red and IR pulses that
+correlate under 0.70, or R outside 0.02-1.84. Measuring stops at six good
+windows, at twelve windows, or early when the wrist keeps moving (fewer than
+two good of the first five, or four good no longer reachable).
 
-RTT shows one line per window and the result:
+With at least four good windows within 30% of their median R, those windows are
+pooled into one fit of red against IR, giving the final R, and SpO2 comes from
+the curve, shown as 80-100%, with a quality score (share of measured windows
+used x pooled correlation, 0-100). A result under 80% is treated as an unstable
+signal and retried rather than reported: at rest it is far more likely a bad
+wrist signal than real. Otherwise no value is reported, and the result line
+gives the reason (movement, weak pulse, unstable signal, off the wrist).
+
+RTT shows one line per window and the result. Each window also prints RF's RMS
+ratio in brackets for comparison:
 
 ```text
-  SpO2: measuring, keep still, red LED 19.2 mA (red level 118250, IR level 171840)
-  SpO2 window 1: R 0.524, PI red 61 ppm, IR 104 ppm, corr 93%, move 12 mg, DC red 118391 IR 171902, good
+  SpO2: measuring, keep still, red LED 51.0 mA (red level 105854, IR level 166421)
+  SpO2 window 1: R 0.488 (RMS 0.493), PI red 102 ppm, IR 208 ppm, corr 98%, move 20 mg, DC red 105935 IR 166256, good
   ...
-  14:05   SpO2 97% (quality 85, R 0.521)
+  SpO2 summary: 6 of 6 windows good, 6 pooled, R 0.515 (median 0.517, spread 14%), corr 97%
+  01:00   SpO2 98% (quality 97, R 0.515)
 ```
 
-**The wrist signal is the main risk.** The IR wrist pulse on this board is small
-(about 100 ppm of DC), and red is usually weaker. The first thing to check on the
-board is the per-window `PI red` and `corr`: if most windows are rejected as weak
-at rest, the optics (LED current, band fit, light shielding) limit SpO2 before the
-algorithm does. The thresholds are at the top of `src/spo2.c`.
+**The wrist signal is the main risk.** The wrist pulse on this board is small
+(IR 150-280 ppm of DC held firmly, less in a loose fit), and red is weaker. The
+first thing to check on the board is the per-window `PI red` and `corr`: if most
+windows are rejected at rest, the optics (LED current, band fit, light
+shielding) limit SpO2 before the algorithm does. The thresholds are at the top
+of `src/spo2.c`.
 
 ### SpO2 calibration
 
-`A` and `B` in `include/app_config.h` are the textbook 110 and 25. On the
-prototype, seated at rest, three measurements gave R 0.44-0.48 (six or seven of
-seven windows good, red/IR correlation 85-96%), so 98-99%: consistent and
-plausible for a healthy wearer, and the agreed target for this version is an
-estimate of that quality. The formula has **not** been checked against a
-reference oximeter for this board, enclosure and LED wavelengths, so readings can
-be a few percent off. To calibrate:
+`A`, `B` and `C` in `include/app_config.h` are Maxim's published curve for the
+MAX3010x (the one behind its RD117 lookup table, also used by RF):
+SpO2 = -45.060 R² + 30.354 R + 94.845, which gives 99% at R 0.45, 98% at 0.55,
+94% at 0.70 and 90% at 0.80. On the prototype, seated and held firmly, five
+measurements gave R 0.44-0.52, so 98-99%: consistent and plausible for a healthy
+wearer, and the agreed target for this version is an estimate of that quality.
+The curve has **not** been checked against a reference oximeter for this board,
+enclosure and LED wavelengths, so readings can be a few percent off. To
+calibrate:
 
 1. Fix the MAX30101 VDD supply first (see Hardware caveats); calibration data
    taken with the sensor out of specification would have to be redone.
@@ -366,7 +397,8 @@ be a few percent off. To calibrate:
 3. Ask for a measurement (write `1` to SpO2, or wait for the scheduled one) and
    note the R from the result line and the oximeter's reading.
 4. Repeat for 5-10 people, a few sessions each, for 20 or more good pairs.
-5. Fit SpO2 = A - B x R by least squares and put A and B in `app_config.h`.
+5. Fit SpO2 = A R² + B R + C (or a line, with A = 0) by least squares and put
+   A, B and C in `app_config.h`.
 
 Healthy people read 95-99%, so this calibrates the normal range well. Proving
 accuracy at low saturations needs a clinical desaturation study, which is out of
@@ -374,8 +406,9 @@ scope.
 
 ## Heart-rate algorithm
 
-No open-source MAX30101 algorithm is built for the wrist: Maxim's RF algorithm
-(MAXREFDES117) and SparkFun's beat detector are tuned for IR on a fingertip,
+No open-source MAX30101 algorithm is built for the wrist: Maxim's RD117
+reference code (MAXREFDES117), the RF algorithm that improves on it, and
+SparkFun's beat detector are tuned for IR on a fingertip,
 and Maxim's wrist algorithm runs closed-source on the MAX32664 sensor hub. That
 hub's documentation says its default wrist algorithm uses the green LED and
 needs an accelerometer for motion. This firmware follows the same approach

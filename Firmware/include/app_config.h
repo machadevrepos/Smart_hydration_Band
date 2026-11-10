@@ -85,15 +85,19 @@
 #endif
 
 /*
- * SpO2 = A - B * R, R being the ratio of ratios. 110 - 25 R is the textbook
- * formula. On the prototype at rest it gave R 0.44-0.48, so 98-99%, which is
- * plausible, but it has not been checked against a reference oximeter: treat
- * readings as an estimate (a few percent). To calibrate, fit A and B from R
- * (printed over RTT) against a fingertip oximeter; see "SpO2 calibration" in
- * the README.
+ * SpO2 = A * R^2 + B * R + C, R being the ratio of ratios. The default is
+ * Maxim's published curve for the MAX3010x sensors, the one behind the lookup
+ * table in Maxim's RD117 reference code (and SparkFun's port of it) and used by
+ * the RF algorithm: -45.060 R^2 + 30.354 R + 94.845. It gives 99% at R 0.45,
+ * 98% at 0.55, 94% at 0.70 and 90% at 0.80. It has not been checked against a
+ * reference oximeter on this band: treat readings as an estimate (a few
+ * percent). To calibrate, fit A, B and C from R (printed over RTT) against a
+ * fingertip oximeter; see "SpO2 calibration" in the README. For a straight
+ * line, set A to 0.
  */
-#define APP_SPO2_CAL_A 110.0f
-#define APP_SPO2_CAL_B 25.0f
+#define APP_SPO2_CAL_A (-45.060f)
+#define APP_SPO2_CAL_B 30.354f
+#define APP_SPO2_CAL_C 94.845f
 
 /* Status LED level per color, 0-255. Current and brightness rise with it. */
 #define APP_LED_LEVEL 40
