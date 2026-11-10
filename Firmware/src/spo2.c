@@ -58,7 +58,13 @@ LOG_MODULE_REGISTER(spo2, LOG_LEVEL_INF);
  */
 #define AGREE_FRACTION  0.20f
 
-#define SPO2_MIN_PERCENT 70
+/*
+ * Reported range. At rest, a wrist reading under 80% is far more likely a bad
+ * signal than real, and showing it would alarm the wearer, so such a result
+ * counts as an unstable signal and is retried instead of reported. Above 100
+ * (R below 0.4 with the default formula) is shown as 100.
+ */
+#define SPO2_MIN_PERCENT 80
 #define SPO2_MAX_PERCENT 100
 
 /* Band-pass as in heart_rate.c: 2x high-pass 0.9 Hz, low-pass 3 Hz, at 100 Hz. */
@@ -385,6 +391,13 @@ static void conclude(void)
 		return;
 	}
 
+	if (APP_SPO2_CAL_A - APP_SPO2_CAL_B * r < SPO2_MIN_PERCENT) {
+		printk("  SpO2 below %d%% at R %d.%03d: treated as an unstable signal\n",
+		       SPO2_MIN_PERCENT, (int)r, (int)(r * 1000.0f) % 1000);
+		finish(SPO2_STATUS_UNSTABLE, r, 0.0f);
+		return;
+	}
+
 	finish(SPO2_STATUS_OK, r, corr_sum / good_windows);
 }
 
@@ -483,7 +496,14 @@ void spo2_add_sample(const struct max30101_sample *s)
 			close_window();
 			sample_count = 0;
 			clear_sums();
-			if (++window_index >= WINDOW_COUNT) {
+			window_index++;
+			/*
+			 * Stop as soon as the result is settled: all windows done, or too
+			 * many rejected for MIN_GOOD_WINDOWS to be reachable (keeps the red
+			 * LED from burning 35 s on a wrist that keeps moving).
+			 */
+			if (window_index >= WINDOW_COUNT ||
+			    good_windows + (WINDOW_COUNT - window_index) < MIN_GOOD_WINDOWS) {
 				conclude();
 			}
 		}

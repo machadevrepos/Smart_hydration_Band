@@ -326,8 +326,12 @@ after the same 0.9-3 Hz band-pass as heart rate, and
 A window is rejected for more than 100 mg of movement on any axis (BMI270), a DC
 level outside 20000-250000, a perfusion index (AC/DC) under 30 ppm on either
 channel, or red and IR pulses that correlate under 0.80. With at least four good
-windows that agree within 20% of their median R, SpO2 = A - B x R, limited to
-70-100%, with a quality score (good windows x mean correlation). Otherwise no
+windows that agree within 20% of their median R, SpO2 = A - B x R, shown as
+80-100%, with a quality score (good windows x mean correlation). A result under
+80% is treated as an unstable signal and retried rather than reported: at rest
+it is far more likely a bad wrist signal than real. A measurement stops early
+once too many windows are rejected for four good ones to be possible, so the
+red LED is not kept on for a wrist that keeps moving. Otherwise no
 value is reported, and the result line gives the reason (movement, weak pulse,
 unstable signal, off the wrist).
 
