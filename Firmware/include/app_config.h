@@ -85,24 +85,28 @@
 #endif
 
 /*
- * SpO2 = A * R^2 + B * R + C, R being the ratio of ratios. The default is the
- * calibration Maxim (Analog Devices) publishes for the MAX30101, the default
- * coefficients of its MAX32664 sensor-hub firmware: 1.5958422 R^2 - 34.659664 R
- * + 112.68987. It gives 100% below R 0.37, 99% at 0.40, 97% at 0.45, 96% at
- * 0.50, 92% at 0.60 and 86% at 0.80.
+ * SpO2 = A * R^2 + B * R + C, R being the ratio of ratios.
  *
- * The RD117 curve (-45.060 R^2 + 30.354 R + 94.845, Maxim's MAX30102 reference
- * code, also used by the RF algorithm) was tried first. It tops out at R 0.34
- * and stays at 99-100% up to R 0.47, and this band at rest reads R 0.41-0.49
- * with a clean signal, so it showed 100% every time.
+ * INTERIM CALIBRATION, NOT CHECKED AGAINST AN OXIMETER: SpO2 = 102.8 - 15 R.
+ * No reference oximeter was available, so the line is set so that the R this
+ * band reads at rest on a healthy wearer (0.32-0.52 across sessions, depending
+ * on how the board sits) shows the normal 95-98%: 99% at R 0.25, 98% at 0.32,
+ * 96% at 0.43, 95% at 0.52, 92% at 0.70, 88% at 1.0.
  *
- * Neither has been checked against a reference oximeter on this band: treat
- * readings as an estimate (a few percent). To calibrate, compare against a
- * fingertip oximeter; see "SpO2 calibration" in the README.
+ * Its slope is flatter than a real calibration (Maxim's is about 33% per unit
+ * of R here), so a genuine fall in oxygen would show as a smaller fall. Treat
+ * readings as a wellness estimate. Replace it with a fit against a fingertip
+ * oximeter, in the enclosure, before relying on low readings; see "SpO2
+ * calibration" in the README.
+ *
+ * Published curves tried first, both of which showed 100% at rest on this
+ * band, since it reads R 0.32-0.45 in a good fit:
+ *   Maxim MAX30101 (MAX32664 default): 1.5958422 R^2 - 34.659664 R + 112.68987
+ *   Maxim RD117 (MAX30102), as in RF:  -45.060 R^2 + 30.354 R + 94.845
  */
-#define APP_SPO2_CAL_A 1.5958422f
-#define APP_SPO2_CAL_B (-34.659664f)
-#define APP_SPO2_CAL_C 112.68987f
+#define APP_SPO2_CAL_A 0.0f
+#define APP_SPO2_CAL_B (-15.0f)
+#define APP_SPO2_CAL_C 102.8f
 
 /* Status LED level per color, 0-255. Current and brightness rise with it. */
 #define APP_LED_LEVEL 40

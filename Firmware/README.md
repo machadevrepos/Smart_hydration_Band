@@ -318,8 +318,8 @@ before delivery.**
 
 **Method.** It follows the open-source RF algorithm for the MAX3010x
 (R. Fraczkiewicz, [MAX30102_by_RF](https://github.com/aromring/MAX30102_by_RF),
-the usual replacement for Maxim's RD117 reference code), with Maxim's published
-calibration for the MAX30101, and three changes for a band worn loosely on the wrist rather
+the usual replacement for Maxim's RD117 reference code), with an interim
+calibration (see below), and three changes for a band worn loosely on the wrist rather
 than a fingertip pressed on the sensor:
 
 | | RF algorithm (fingertip) | This firmware (wrist) |
@@ -330,7 +330,7 @@ than a fingertip pressed on the sensor:
 | Pulse check | IR autocorrelation ratio >= 0.5 (the signal repeats at the pulse rate) | the same measure, from the heart-rate estimator: mean quality >= 65 over the window |
 | Valid R | 0.02-1.84 | 0.02-1.84 |
 | Result | one 4 s buffer | 4 s windows until six are good (at most twelve), pooled into one R |
-| SpO2 from R | -45.060 R² + 30.354 R + 94.845 (RD117, MAX30102) | 1.5958422 R² - 34.659664 R + 112.68987 (Maxim's MAX30101 calibration, MAX32664 default), shown 80-100% |
+| SpO2 from R | -45.060 R² + 30.354 R + 94.845 (RD117, MAX30102) | interim 102.8 - 15 R, not oximeter-checked (see "SpO2 calibration"); R 1.0 or more rejected |
 
 Why the changes: a loose fit gives a smaller pulse and more noise, and the red
 pulse is the weaker one. With RF's RMS ratio, red noise raises R, so readings
@@ -366,9 +366,9 @@ two good of the first five, or four good no longer reachable).
 With at least four good windows within 30% of their median R, those windows are
 pooled into one fit of red against IR, giving the final R, and SpO2 comes from
 the curve, shown as 80-100%, with a quality score (share of measured windows
-used x pooled correlation, 0-100). A result under 80% is treated as an unstable
-signal and retried rather than reported: at rest it is far more likely a bad
-wrist signal than real. Otherwise no value is reported, and the result line
+used x pooled correlation, 0-100). A result under 80%, or a pooled R of 1.0 or
+more, is treated as an unstable signal and retried rather than reported: at
+rest it is far more likely a bad wrist signal than real. Otherwise no value is reported, and the result line
 gives the reason (movement, weak pulse, unstable signal, off the wrist). Windows
 rejected for no clear pulse count as movement in that reason, since on a quiet
 accelerometer they mean the band is shifting on the skin.
@@ -393,23 +393,46 @@ of `src/spo2.c`.
 
 ### SpO2 calibration
 
-`A`, `B` and `C` in `include/app_config.h` are the calibration Maxim (Analog
-Devices) publishes for the MAX30101, the default coefficients of its MAX32664
-sensor-hub firmware: SpO2 = 1.5958422 R² - 34.659664 R + 112.68987. It gives
-100% below R 0.37, 99% at 0.40, 97% at 0.45, 96% at 0.50, 92% at 0.60 and 86% at
-0.80.
+**The current calibration is an interim one, not checked against an oximeter.**
+`A`, `B` and `C` in `include/app_config.h` give SpO2 = 102.8 - 15 R:
 
-The RD117 curve (-45.060 R² + 30.354 R + 94.845, from Maxim's MAX30102 reference
-code and used by RF) was tried first. It peaks at R 0.34 and stays at 99-100% up
-to R 0.47. With the band worn well and a clean signal (red/IR correlation
-97-99%), two measurements gave R 0.427 and 0.433, so it showed 100% both times;
-with the MAX30101 curve the same R gives 98%.
+| R | 0.25 | 0.32 | 0.43 | 0.52 | 0.70 | 1.0 |
+|---|---|---|---|---|---|---|
+| SpO2 | 99% | 98% | 96% | 95% | 92% | 88% (rejected, see below) |
 
-Neither curve has been checked against a reference oximeter for this board,
-enclosure and LED wavelengths, so readings can be a few percent off. The quickest
-check is a one-point offset: wear a fingertip oximeter on the same arm, take 3-4
-readings side by side, and if the band reads consistently higher or lower, change
-`C` by the average difference. A full calibration:
+How it was set: on the prototype, seated at rest with a clean signal (red/IR
+correlation 81-99%), the band read R 0.32-0.52 across sessions. The spread
+comes from how the board sits on the wrist (pressure, light reaching the
+detector without passing through skin), not from the wearer, whose SpO2 at rest
+is normally 95-98%. No reference oximeter was available, so the line was set to
+map that resting range onto 95-98%.
+
+Its limits, which the client should be told:
+
+- It is an estimate for a healthy wearer at rest, not a measurement traceable
+  to a reference.
+- Its slope is flatter than a real calibration (Maxim's is about 33% per unit
+  of R in this range), so a real fall in oxygen shows as a smaller fall. A
+  pooled R of 1.0 or more is rejected as an unstable signal whatever the curve
+  says, since red and IR swinging by the same fraction is the signature of the
+  band moving on the skin.
+- The enclosure will change the optics, and with them R.
+
+The published curves were tried first and both showed 100% at rest, because this
+band reads R 0.32-0.45 in a good fit:
+
+- Maxim's MAX30101 calibration (MAX32664 sensor-hub default),
+  1.5958422 R² - 34.659664 R + 112.68987: 100% below R 0.37, so two sessions at R
+  0.32-0.33 showed 100%.
+- Maxim's RD117 curve (MAX30102 reference code, used by RF),
+  -45.060 R² + 30.354 R + 94.845: peaks at R 0.34 and stays at 99-100% up to R
+  0.47, so sessions at R 0.43 showed 100%.
+
+Replace the interim line with a fit against a fingertip oximeter, done in the
+enclosure. The quickest check is a one-point offset: wear a fingertip oximeter
+on the same arm, take 3-4 readings side by side, and if the band reads
+consistently higher or lower, change `C` by the average difference. A full
+calibration:
 
 1. Fix the MAX30101 VDD supply first (see Hardware caveats); calibration data
    taken with the sensor out of specification would have to be redone.

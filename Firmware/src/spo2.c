@@ -90,12 +90,19 @@ LOG_MODULE_REGISTER(spo2, LOG_LEVEL_INF);
 /*
  * Reported range. At rest, a wrist reading under 80% is far more likely a bad
  * signal than real, and showing it would alarm the wearer, so such a result
- * counts as an unstable signal and is retried instead of reported (R above
- * about 1.0 with the default curve). Below R 0.37 the default curve passes 100
- * and is shown as 100.
+ * counts as an unstable signal and is retried instead of reported.
  */
 #define SPO2_MIN_PERCENT 80
 #define SPO2_MAX_PERCENT 100
+/*
+ * A pooled R at or above this is treated as an unstable signal whatever the
+ * calibration says. Red and IR swinging by the same fraction (R near 1) is the
+ * signature of the band moving on the skin rather than of blood, and no
+ * healthy wearer at rest reads it (this band: 0.32-0.52). The published curves
+ * put R 1.0 at about 80%, so this keeps the same cut-off with the flatter
+ * interim calibration, which would show it as 88%.
+ */
+#define RATIO_MAX_RESULT 1.0f
 
 /* Band-pass as in heart_rate.c: 2x high-pass 0.9 Hz, low-pass 3 Hz, at 100 Hz. */
 struct biquad {
@@ -312,8 +319,8 @@ static float median(float *v, int n)
 }
 
 /*
- * SpO2 from R with the calibration curve in app_config.h (Maxim's MAX30101
- * calibration by default), before the 80-100% limits.
+ * SpO2 from R with the calibration curve in app_config.h (an interim line by
+ * default), before the 80-100% limits.
  */
 static float spo2_from_ratio(float r)
 {
@@ -519,9 +526,10 @@ static void conclude(void)
 		return;
 	}
 
-	if (spo2_from_ratio(r) < SPO2_MIN_PERCENT) {
-		printk("  SpO2 below %d%% at R %d.%03d: treated as an unstable signal\n",
-		       SPO2_MIN_PERCENT, (int)r, (int)(r * 1000.0f) % 1000);
+	if (r >= RATIO_MAX_RESULT || spo2_from_ratio(r) < SPO2_MIN_PERCENT) {
+		printk("  SpO2 R %d.%03d is outside a resting reading (R under 1, SpO2 %d%% or more): "
+		       "treated as an unstable signal\n",
+		       (int)r, (int)(r * 1000.0f) % 1000, SPO2_MIN_PERCENT);
 		finish(SPO2_STATUS_UNSTABLE, r, 0);
 		return;
 	}
