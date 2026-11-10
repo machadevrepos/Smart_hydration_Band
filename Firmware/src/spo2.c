@@ -65,6 +65,16 @@ LOG_MODULE_REGISTER(spo2, LOG_LEVEL_INF);
  * firmly, less when loose), so the perfusion floor is low.
  */
 #define MIN_CORRELATION 0.70f    /* Red and IR pulses must move together. */
+/*
+ * RF's second check: the signal must repeat at the pulse rate (its normalized
+ * autocorrelation peak, "min_autocorrelation_ratio" 0.5 in RF). The heart-rate
+ * estimator already computes exactly that for the IR channel every second, as
+ * its quality, so a window needs its mean quality at or above this. On the
+ * wrist, 65 (the "fair" level) is used: a band shifting on the skin gives red
+ * and IR swings that correlate well (R near 1, about 85%) while the heart rate
+ * shows "no clear pulse" (quality 20-50); this check throws those windows out.
+ */
+#define MIN_PULSE_QUALITY 65
 #define MIN_PERFUSION   0.00002f /* AC/DC, 20 ppm. */
 #define MAX_MOTION_MG   100      /* Largest swing on any axis within a window. */
 /* Valid R range, as in the RF algorithm (0.02-1.84). */
@@ -121,6 +131,8 @@ enum reject {
 	REJECT_MOTION,
 	REJECT_WEAK,
 	REJECT_UNSTABLE,
+	REJECT_NO_PULSE,
+	REJECT_COUNT,
 };
 
 /* Main loop only. */
@@ -148,6 +160,9 @@ static struct {
 	bool accel_seen;
 	int16_t accel_min[3];
 	int16_t accel_max[3];
+	/* Heart-rate quality over the window: sum and number of main loop passes. */
+	int32_t pulse_quality_sum;
+	int32_t pulse_quality_passes;
 } acc;
 
 /*
@@ -161,7 +176,7 @@ static struct {
 	double syy;
 } good[MAX_WINDOWS];
 static int good_windows;
-static int rejects[4];
+static int rejects[REJECT_COUNT];
 
 /* Shared with other threads. */
 static atomic_t requested;
@@ -260,6 +275,8 @@ static void clear_sums(void)
 	acc.ir2 = 0.0;
 	acc.red_ir = 0.0;
 	acc.accel_seen = false;
+	acc.pulse_quality_sum = 0;
+	acc.pulse_quality_passes = 0;
 }
 
 static int set_red(uint8_t pa)
@@ -366,6 +383,9 @@ static void close_window(void)
 			      ? (float)(acc.red_ir / acc.ir2) * dc_ir / dc_red
 			      : 0.0f;
 	int motion_mg = -1;
+	int pulse_quality = acc.pulse_quality_passes > 0
+				    ? acc.pulse_quality_sum / acc.pulse_quality_passes
+				    : 0;
 	enum reject why = REJECT_NONE;
 
 	if (acc.accel_seen) {
@@ -382,6 +402,8 @@ static void close_window(void)
 	} else if (dc_red < DC_MIN || dc_red > DC_MAX || dc_ir < DC_MIN || dc_ir > DC_MAX ||
 		   pi_red < MIN_PERFUSION || pi_ir < MIN_PERFUSION) {
 		why = REJECT_WEAK;
+	} else if (pulse_quality < MIN_PULSE_QUALITY) {
+		why = REJECT_NO_PULSE;
 	} else if (corr < MIN_CORRELATION || ratio < RATIO_MIN || ratio > RATIO_MAX) {
 		why = REJECT_UNSTABLE;
 	}
@@ -396,14 +418,15 @@ static void close_window(void)
 
 	/* One line per window: what calibration and threshold tuning need. */
 	printk("  SpO2 window %d: R %d.%03d (RMS %d.%03d), PI red %d ppm, IR %d ppm, corr %d%%, "
-	       "move %d mg, DC red %d IR %d, %s\n",
+	       "pulse %d, move %d mg, DC red %d IR %d, %s\n",
 	       window_index + 1, (int)ratio, (int)(ratio * 1000.0f) % 1000, (int)ratio_rms,
 	       (int)(ratio_rms * 1000.0f) % 1000, (int)(pi_red * 1e6f), (int)(pi_ir * 1e6f),
-	       (int)(corr * 100.0f), motion_mg, (int)dc_red, (int)dc_ir,
-	       why == REJECT_NONE     ? "good"
-	       : why == REJECT_MOTION ? "rejected: movement"
-	       : why == REJECT_WEAK   ? "rejected: weak or out of range"
-				      : "rejected: red and IR differ");
+	       (int)(corr * 100.0f), pulse_quality, motion_mg, (int)dc_red, (int)dc_ir,
+	       why == REJECT_NONE       ? "good"
+	       : why == REJECT_MOTION   ? "rejected: movement"
+	       : why == REJECT_WEAK     ? "rejected: weak or out of range"
+	       : why == REJECT_NO_PULSE ? "rejected: no clear pulse"
+					: "rejected: red and IR differ");
 
 	rejects[why]++;
 	if (why == REJECT_NONE && good_windows < MAX_WINDOWS) {
@@ -430,9 +453,13 @@ static void conclude(void)
 	if (good_windows < MIN_GOOD_WINDOWS) {
 		enum spo2_status status = SPO2_STATUS_UNSTABLE;
 		float sorted[MAX_WINDOWS];
+		/*
+		 * No clear pulse while the accelerometer is quiet is the band shifting
+		 * on the skin: the same advice as movement (keep still, fit the band).
+		 */
+		int moved = rejects[REJECT_MOTION] + rejects[REJECT_NO_PULSE];
 
-		if (rejects[REJECT_MOTION] >= rejects[REJECT_WEAK] &&
-		    rejects[REJECT_MOTION] >= rejects[REJECT_UNSTABLE]) {
+		if (moved >= rejects[REJECT_WEAK] && moved >= rejects[REJECT_UNSTABLE]) {
 			status = SPO2_STATUS_MOTION;
 		} else if (rejects[REJECT_WEAK] >= rejects[REJECT_UNSTABLE]) {
 			status = SPO2_STATUS_WEAK;
@@ -440,9 +467,10 @@ static void conclude(void)
 		for (int i = 0; i < good_windows; i++) {
 			sorted[i] = good[i].ratio;
 		}
-		printk("  SpO2 summary: %d of %d windows good (moved %d, weak %d, red/IR differ %d)\n",
-		       good_windows, window_index, rejects[REJECT_MOTION], rejects[REJECT_WEAK],
-		       rejects[REJECT_UNSTABLE]);
+		printk("  SpO2 summary: %d of %d windows good (moved %d, no clear pulse %d, weak %d, "
+		       "red/IR differ %d)\n",
+		       good_windows, window_index, rejects[REJECT_MOTION], rejects[REJECT_NO_PULSE],
+		       rejects[REJECT_WEAK], rejects[REJECT_UNSTABLE]);
 		finish(status, good_windows > 0 ? median(sorted, good_windows) : 0.0f, 0);
 		return;
 	}
@@ -620,9 +648,17 @@ void spo2_sensor_gap(void)
 	}
 }
 
-static void track_motion(const struct spo2_inputs *in)
+/* Per main loop pass while collecting: heart-rate quality and the motion range. */
+static void track_inputs(const struct spo2_inputs *in)
 {
-	if (state != STATE_COLLECT || !in->accel_ok) {
+	if (state != STATE_COLLECT) {
+		return;
+	}
+
+	acc.pulse_quality_sum += CLAMP(in->pulse_quality, 0, 100);
+	acc.pulse_quality_passes++;
+
+	if (!in->accel_ok) {
 		return;
 	}
 
@@ -671,7 +707,7 @@ uint32_t spo2_process(const struct spo2_inputs *in)
 	} else if (now - started_ms > TIMEOUT_MS) {
 		finish(SPO2_STATUS_SENSOR, 0.0f, 0);
 	} else {
-		track_motion(in);
+		track_inputs(in);
 	}
 
 	events = pending_events;

@@ -61,6 +61,12 @@ struct spo2_inputs {
 	bool contact;
 	/* A heart-rate reading is showing (there is a pulse to measure). */
 	bool pulse;
+	/*
+	 * The heart-rate estimator's latest signal quality, 0-100 (its normalized
+	 * autocorrelation peak: how clearly the IR signal repeats at the pulse
+	 * rate), 0 when there is no estimate.
+	 */
+	int pulse_quality;
 	/* Acceleration, valid only if accel_ok. */
 	bool accel_ok;
 	int16_t accel[3];

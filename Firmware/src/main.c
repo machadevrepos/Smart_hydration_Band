@@ -514,6 +514,7 @@ static void run_spo2(const struct contact *contact, const struct hr_status *st)
 		.contact = st->sensor_ok && st->read_errors == 0 && contact->on,
 		/* A held reading still means a pulse was found moments ago (loose fit). */
 		.pulse = st->have_estimate && st->hr.bpm > 0,
+		.pulse_quality = (st->have_estimate && !st->hr.settling) ? st->hr.quality : 0,
 	};
 	unsigned int secs = (unsigned int)(k_uptime_get() / 1000);
 	struct spo2_result res;

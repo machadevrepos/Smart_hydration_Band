@@ -238,7 +238,7 @@ medical reading.
 | `1` | OK: byte 1 is a fresh reading |
 | `2` | Measuring now (30-55 s) |
 | `3` | Not on the skin |
-| `4` | Too much movement: ask the user to keep still |
+| `4` | Too much movement, or the band shifting on the skin: ask the user to keep still and check the fit |
 | `5` | Pulse too weak |
 | `6` | Unstable signal |
 | `7` | Sensor unavailable |

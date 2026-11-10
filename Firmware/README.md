@@ -327,6 +327,7 @@ than a fingertip pressed on the sensor:
 | DC | mean | mean |
 | Pulse (AC) | RMS of the linearly detrended signal | 0.9-3 Hz band-pass (as heart rate), then a least-squares fit of red against IR |
 | Signal check | red/IR Pearson correlation >= 0.8 | >= 0.70 per window, plus movement (accelerometer), level and perfusion checks |
+| Pulse check | IR autocorrelation ratio >= 0.5 (the signal repeats at the pulse rate) | the same measure, from the heart-rate estimator: mean quality >= 65 over the window |
 | Valid R | 0.02-1.84 | 0.02-1.84 |
 | Result | one 4 s buffer | 4 s windows until six are good (at most twelve), pooled into one R |
 | SpO2 from R | -45.060 R² + 30.354 R + 94.845 | the same curve, held at its 100% peak below R 0.34, shown 80-100% |
@@ -339,6 +340,14 @@ does not bias R. Pooling the good windows of a measurement, each weighted by
 the strength of its pulse, then averages out the extra noise that the lower
 correlation threshold lets in.
 
+The pulse check matters most for a loose fit. When the band shifts on the skin,
+red and IR swing together and still correlate well (about 85%), but their ratio
+is near 1, which reads as about 85% SpO2. The accelerometer barely notices (20-40
+mg), while the heart rate shows "no clear pulse" (quality 20-50) at the same
+time. A wrist test before this check gave 95%, then a failed attempt, then a
+false 85% from exactly such windows; with the check those windows are rejected
+and the measurement is retried instead.
+
 **How, 30-55 s.** The red LED (off otherwise) is turned on and its current
 adjusted so the red level sits near 120000 counts. After 2 s for the filters to
 settle, 4 s windows are measured. In each, DC is the mean of each channel and
@@ -348,7 +357,8 @@ settle, 4 s windows are measured. In each, DC is the mean of each channel and
 on the band-passed signals, the ratio of ratios (red AC/DC) / (IR AC/DC) with the
 red AC taken as the part that follows IR. A window is rejected for more than
 100 mg of movement on any axis (BMI270), a DC level outside 20000-250000, a
-perfusion index (AC/DC) under 20 ppm on either channel, red and IR pulses that
+perfusion index (AC/DC) under 20 ppm on either channel, a heart-rate quality
+under 65 on average over the window (no clear pulse), red and IR pulses that
 correlate under 0.70, or R outside 0.02-1.84. Measuring stops at six good
 windows, at twelve windows, or early when the wrist keeps moving (fewer than
 two good of the first five, or four good no longer reachable).
@@ -359,14 +369,16 @@ the curve, shown as 80-100%, with a quality score (share of measured windows
 used x pooled correlation, 0-100). A result under 80% is treated as an unstable
 signal and retried rather than reported: at rest it is far more likely a bad
 wrist signal than real. Otherwise no value is reported, and the result line
-gives the reason (movement, weak pulse, unstable signal, off the wrist).
+gives the reason (movement, weak pulse, unstable signal, off the wrist). Windows
+rejected for no clear pulse count as movement in that reason, since on a quiet
+accelerometer they mean the band is shifting on the skin.
 
 RTT shows one line per window and the result. Each window also prints RF's RMS
 ratio in brackets for comparison:
 
 ```text
   SpO2: measuring, keep still, red LED 51.0 mA (red level 105854, IR level 166421)
-  SpO2 window 1: R 0.488 (RMS 0.493), PI red 102 ppm, IR 208 ppm, corr 98%, move 20 mg, DC red 105935 IR 166256, good
+  SpO2 window 1: R 0.483 (RMS 0.493), PI red 102 ppm, IR 208 ppm, corr 98%, pulse 86, move 20 mg, DC red 105935 IR 166256, good
   ...
   SpO2 summary: 6 of 6 windows good, 6 pooled, R 0.515 (median 0.517, spread 14%), corr 97%
   01:00   SpO2 98% (quality 97, R 0.515)
