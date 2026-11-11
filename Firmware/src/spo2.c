@@ -154,6 +154,14 @@ static int agc_rounds;
 static int sample_count;
 static int window_index;
 static uint32_t pending_events;
+/*
+ * Set when turning the red LED off failed (an I2C error). Retried every
+ * RED_OFF_RETRY_MS while idle, so a lit LED cannot drain the battery until the
+ * next measurement.
+ */
+#define RED_OFF_RETRY_MS 1000
+static bool red_off_pending;
+static int64_t red_off_retry_ms;
 
 static struct channel_filter red_filter;
 static struct channel_filter ir_filter;
@@ -343,7 +351,12 @@ static void finish(enum spo2_status status, float ratio, uint8_t quality)
 {
 	int64_t now = k_uptime_get();
 
-	(void)set_red(0);
+	/* Without a working sensor the LED was never lit. */
+	if (sensor_ok && set_red(0) < 0) {
+		red_off_pending = true;
+		red_off_retry_ms = now + RED_OFF_RETRY_MS;
+		LOG_WRN("Red LED did not turn off, retrying");
+	}
 	state = STATE_IDLE;
 
 	k_spinlock_key_t key = k_spin_lock(&result_lock);
@@ -552,6 +565,7 @@ static void start(int64_t now)
 	clear_sums();
 	started_ms = now;
 
+	red_off_pending = false;
 	if (set_red(last_good_pa) < 0) {
 		finish(SPO2_STATUS_SENSOR, 0.0f, 0);
 		return;
@@ -692,6 +706,15 @@ uint32_t spo2_process(const struct spo2_inputs *in)
 {
 	int64_t now = k_uptime_get();
 	uint32_t events;
+
+	if (red_off_pending && state == STATE_IDLE && now >= red_off_retry_ms) {
+		if (set_red(0) == 0) {
+			red_off_pending = false;
+			LOG_INF("Red LED off");
+		} else {
+			red_off_retry_ms = now + RED_OFF_RETRY_MS;
+		}
+	}
 
 	if (state == STATE_IDLE) {
 		bool asked = atomic_set(&requested, 0) != 0;
