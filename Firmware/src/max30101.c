@@ -3,8 +3,8 @@
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/i2c.h>
-#include <zephyr/drivers/sensor.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/byteorder.h>
 
 #include "max30101.h"
 
@@ -15,7 +15,7 @@ LOG_MODULE_REGISTER(max30101, LOG_LEVEL_INF);
 BUILD_ASSERT(DT_NODE_EXISTS(MAX30101_NODE), "No okay maxim,max30101 node in devicetree");
 
 /*
- * max30101_read_one() below and the heart-rate timing rely on this exact driver
+ * max30101_read_fifo() below and the heart-rate timing rely on this exact driver
  * configuration: two FIFO channels, red then IR, at 100 Hz. IR carries heart
  * rate; red is only lit during an SpO2 measurement (max30101_set_red_current()).
  */
@@ -35,6 +35,20 @@ BUILD_ASSERT(DT_PROP(MAX30101_NODE, led_pw) == 411, "led-pw must be 411 (18-bit 
 /* FIFO pointer registers, read as one burst: FIFO_WR_PTR, OVF_COUNTER, FIFO_RD_PTR. */
 #define REG_FIFO_WR_PTR 0x04
 #define FIFO_PTR_MASK   0x1f
+/* Reading it pops samples; the address does not advance during a burst. */
+#define REG_FIFO_DATA   0x07
+
+/*
+ * One FIFO sample: slot 1 (red) then slot 2 (IR), 3 bytes each, big endian,
+ * the 18-bit value in the low bits (411 us pulse width, checked above).
+ */
+#define SLOT_BYTES      3
+#define SAMPLE_BYTES    (2 * SLOT_BYTES)
+#define FIFO_DATA_MASK  0x3ffff
+
+/* The whole FIFO in one transfer; the nRF52832 TWIM moves at most 255 bytes. */
+static uint8_t fifo_buf[MAX30101_FIFO_DEPTH * SAMPLE_BYTES];
+BUILD_ASSERT(sizeof(fifo_buf) <= 255, "A full FIFO must fit in one TWIM transfer");
 
 #define REG_FIFO_CONFIG 0x08
 #define REG_MODE_CONFIG 0x09
@@ -123,35 +137,6 @@ int max30101_set_red_current(uint8_t pa)
 	return i2c_reg_write_byte_dt(&max30101_i2c, REG_LED1_PA, pa);
 }
 
-/*
- * Fetch one frame through the Zephyr driver. This pops one sample from the
- * FIFO, both slots (red and IR) in one I2C transfer.
- */
-static int max30101_read_one(struct max30101_sample *sample)
-{
-	struct sensor_value value;
-	int ret;
-
-	ret = sensor_sample_fetch(max30101_dev);
-	if (ret < 0) {
-		return ret;
-	}
-
-	ret = sensor_channel_get(max30101_dev, SENSOR_CHAN_IR, &value);
-	if (ret < 0) {
-		return ret;
-	}
-	sample->ir = value.val1;
-
-	ret = sensor_channel_get(max30101_dev, SENSOR_CHAN_RED, &value);
-	if (ret < 0) {
-		return ret;
-	}
-	sample->red = value.val1;
-
-	return 0;
-}
-
 int max30101_read_fifo(struct max30101_sample *samples, int max, bool *lost)
 {
 	uint8_t ptr[3];
@@ -163,9 +148,8 @@ int max30101_read_fifo(struct max30101_sample *samples, int max, bool *lost)
 	}
 
 	/*
-	 * The Zephyr driver reads FIFO_DATA without checking whether a sample
-	 * is waiting, so check the pointers first. OVF_COUNTER is cleared when
-	 * a sample is popped, so it must be read before draining.
+	 * The pointers say how many samples are waiting. OVF_COUNTER is cleared
+	 * when a sample is popped, so it must be read before draining.
 	 */
 	ret = i2c_burst_read_dt(&max30101_i2c, REG_FIFO_WR_PTR, ptr, sizeof(ptr));
 	if (ret < 0) {
@@ -184,11 +168,25 @@ int max30101_read_fifo(struct max30101_sample *samples, int max, bool *lost)
 		available = max;
 	}
 
+	if (available == 0) {
+		return 0;
+	}
+
+	/*
+	 * Every waiting sample in one burst instead of one transfer per sample
+	 * through the Zephyr driver: about 25 transfers a second instead of 100.
+	 * The driver still configures the sensor at boot.
+	 */
+	ret = i2c_burst_read_dt(&max30101_i2c, REG_FIFO_DATA, fifo_buf, available * SAMPLE_BYTES);
+	if (ret < 0) {
+		return ret;
+	}
+
 	for (int i = 0; i < available; i++) {
-		ret = max30101_read_one(&samples[i]);
-		if (ret < 0) {
-			return ret;
-		}
+		const uint8_t *p = &fifo_buf[i * SAMPLE_BYTES];
+
+		samples[i].red = (int32_t)(sys_get_be24(p) & FIFO_DATA_MASK);
+		samples[i].ir = (int32_t)(sys_get_be24(p + SLOT_BYTES) & FIFO_DATA_MASK);
 	}
 
 	return available;
