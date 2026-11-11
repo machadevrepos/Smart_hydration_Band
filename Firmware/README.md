@@ -75,8 +75,8 @@ Firmware/
 `max30101.c` owns the sensor. The Zephyr driver configures it at boot from the
 devicetree; after that the wrapper reads the FIFO itself: the write/read
 pointers and overflow counter first, then exactly the samples the sensor
-produced in one burst read (red then IR, 18 bits each), about 25 I2C transfers
-a second instead of one per sample through `sensor_sample_fetch()`.
+produced in one burst read (red then IR, 18 bits each): two transfers per drain
+instead of one per sample through `sensor_sample_fetch()`.
 The estimator relies on evenly spaced samples (10 ms each), so polling jitter
 does not affect the BPM; a FIFO overflow resets the estimator. `heart_rate.c` owns the signal
 algorithm and has no sensor dependency, so it can be reused by a later SpO2 or

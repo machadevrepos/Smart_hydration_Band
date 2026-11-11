@@ -174,7 +174,7 @@ int max30101_read_fifo(struct max30101_sample *samples, int max, bool *lost)
 
 	/*
 	 * Every waiting sample in one burst instead of one transfer per sample
-	 * through the Zephyr driver: about 25 transfers a second instead of 100.
+	 * through the Zephyr driver (100 a second).
 	 * The driver still configures the sensor at boot.
 	 */
 	ret = i2c_burst_read_dt(&max30101_i2c, REG_FIFO_DATA, fifo_buf, available * SAMPLE_BYTES);
