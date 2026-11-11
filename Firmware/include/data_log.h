@@ -20,7 +20,7 @@
 #define DATA_LOG_NIGHT_S     60
 
 /* Bytes per record on the wire and in flash, all little endian:
- *  0  uint32 seq         record number, from 1, never reused
+ *  0  uint32 seq         record number, from 1, never reused unless erased
  *  4  uint32 time        UTC seconds at the start of the period if FLAG_UTC,
  *                        else seconds since that boot started
  *  8  uint16 steps       steps counted in the period (if FLAG_STEPS)

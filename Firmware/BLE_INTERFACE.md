@@ -183,7 +183,10 @@ See section 3 for how to use them.
 | 11 | uint8 | Format version (2) |
 
 **Write Log control** (4 bytes): uint32, the first sequence number to send. `0`
-means "from the oldest".
+means "from the oldest". A number past the band's next sequence number is
+treated as `0` and the whole log is sent: it means the app last synced a
+different band, or this band's log was erased (a firmware update can do that),
+so the band's numbers started again from 1.
 
 **Log data notifications** come in two kinds, told apart by length:
 
@@ -196,7 +199,7 @@ means "from the oldest".
 
 | Bytes | Type | Field | Meaning |
 | --- | --- | --- | --- |
-| 0-3 | uint32 | seq | Record number. Starts at 1, only grows, never reused. |
+| 0-3 | uint32 | seq | Record number. Starts at 1 and only grows; starts again from 1 only if the log is erased. |
 | 4-7 | uint32 | time | Start of the period. If flag bit 0 is set: Unix time UTC. If not: seconds since the band booted (boot number `boot`). |
 | 8-9 | uint16 | steps | Steps counted in the period. Valid only if flag bit 2 is set. |
 | 10-11 | uint16 | boot | Which power-on (boot) of the band made this record. |
@@ -296,6 +299,13 @@ When the app's saved number is older than the oldest record still stored (the
 band was away long enough to wrap its 1024-record ring), the transfer simply
 starts at the oldest record. A jump in `seq` tells the app that records in
 between were overwritten.
+
+Keep the saved number, and the stored records, per band (by its BLE device
+identifier), since every band numbers its own records from 1. If the band's log
+was erased, the band sends it all again from 1 (see 2.10); records it sends then
+are new, even where their `seq` matches one stored earlier, so an app that sees
+the end marker come back lower than its saved number should treat the band's
+records as a fresh log.
 
 During a log transfer the band asks for a 15-30 ms connection interval, then
 200-400 ms again to save power. The phone may decline; the transfer still works,

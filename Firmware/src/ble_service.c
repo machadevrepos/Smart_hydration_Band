@@ -505,6 +505,19 @@ static void send_log(uint32_t from)
 	}
 
 	data_log_range(&first, &after_last);
+
+	/*
+	 * A number past the end cannot have come from this log: the app last
+	 * synced another band, or this one's flash was erased. Send the whole log
+	 * rather than nothing until the count catches up; the end marker then gives
+	 * the app the right number. Equal to the end is the normal "nothing new".
+	 */
+	if (from > after_last) {
+		printk("  BLE log: asked from %u, past the end (%u): sending all\n", from,
+		       after_last);
+		from = 0;
+	}
+
 	uint32_t seq = MAX(from, first);
 	size_t per_notify = (bt_gatt_get_mtu(conn) - 3) / DATA_LOG_RECORD_LEN;
 
