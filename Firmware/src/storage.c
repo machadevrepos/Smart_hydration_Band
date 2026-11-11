@@ -2,6 +2,7 @@
 #include <zephyr/sys/printk.h>
 
 #include <zephyr/fs/nvs.h>
+#include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/settings/settings.h>
 
@@ -14,6 +15,19 @@ LOG_MODULE_REGISTER(storage, LOG_LEVEL_INF);
 
 static struct nvs_fs *nvs;
 static bool ready;
+
+/* Every access to the NVS: settings here, the data log in data_log.c. */
+static K_MUTEX_DEFINE(nvs_lock);
+
+void storage_lock(void)
+{
+	(void)k_mutex_lock(&nvs_lock, K_FOREVER);
+}
+
+void storage_unlock(void)
+{
+	(void)k_mutex_unlock(&nvs_lock);
+}
 
 int storage_init(void)
 {
@@ -75,7 +89,9 @@ int storage_load(const char *key, void *buf, size_t len)
 	}
 
 	snprintk(name, sizeof(name), KEY_PREFIX "%s", key);
+	storage_lock();
 	ret = settings_load_subtree_direct(name, load_one, &req);
+	storage_unlock();
 	if (ret < 0) {
 		return ret;
 	}
@@ -86,13 +102,18 @@ int storage_load(const char *key, void *buf, size_t len)
 int storage_save(const char *key, const void *buf, size_t len)
 {
 	char name[KEY_NAME_MAX];
+	int ret;
 
 	if (!ready) {
 		return -ENODEV;
 	}
 
 	snprintk(name, sizeof(name), KEY_PREFIX "%s", key);
-	return settings_save_one(name, buf, len);
+	storage_lock();
+	ret = settings_save_one(name, buf, len);
+	storage_unlock();
+
+	return ret;
 }
 
 struct nvs_fs *storage_nvs(void)

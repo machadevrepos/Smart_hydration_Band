@@ -39,4 +39,13 @@ int storage_save(const char *key, const void *buf, size_t len);
 /* The underlying NVS file system, or NULL if storage_init() failed. */
 struct nvs_fs *storage_nvs(void);
 
+/*
+ * Hold while using storage_nvs() directly. NVS serializes its writes but not its
+ * reads, so a read on one thread can walk a sector that a write on another is
+ * erasing for garbage collection, and miss a record that is there. storage_load()
+ * and storage_save() take it themselves. It may be taken again by its holder.
+ */
+void storage_lock(void);
+void storage_unlock(void);
+
 #endif /* STORAGE_H */

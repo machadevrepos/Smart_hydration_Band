@@ -111,6 +111,7 @@ static void scan(void)
 	uint32_t newest = 0;
 	uint32_t first = 0;
 
+	storage_lock();
 	for (uint32_t slot = 0; slot < DATA_LOG_CAPACITY; slot++) {
 		uint8_t raw[DATA_LOG_RECORD_LEN];
 		struct data_log_record rec;
@@ -126,6 +127,7 @@ static void scan(void)
 		newest = MAX(newest, rec.seq);
 		first = first == 0 ? rec.seq : MIN(first, rec.seq);
 	}
+	storage_unlock();
 
 	k_mutex_lock(&range_lock, K_FOREVER);
 	next = newest + 1;
@@ -176,7 +178,9 @@ static void store(struct data_log_record *rec)
 
 	data_log_encode(rec, raw);
 
+	storage_lock();
 	ssize_t ret = nvs_write(fs, slot_id(rec->seq), raw, sizeof(raw));
+	storage_unlock();
 
 	if (ret < 0) {
 		if (!write_failed) {
@@ -352,7 +356,9 @@ int data_log_read(uint32_t seq, struct data_log_record *rec)
 		return -ENOENT;
 	}
 
+	storage_lock();
 	ssize_t ret = nvs_read(fs, slot_id(seq), raw, sizeof(raw));
+	storage_unlock();
 
 	if (ret != sizeof(raw)) {
 		return ret < 0 ? (int)ret : -ENOENT;
