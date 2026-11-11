@@ -113,7 +113,7 @@ succeeds). This stops anyone from buzzing the band nonstop.
 | 0-1 | uint16 | Daily Mode reminder interval, minutes |
 | 2-3 | uint16 | Night Mode reminder interval, minutes |
 
-- Accepted values: **1 to 240**. The app's picker should offer 20, 30, 45 and 60.
+- Accepted values: **15 to 240**; anything else is rejected with an error. The app's picker should offer 20, 30, 45 and 60.
   **`0` means "use the default"** (Daily 90, Night 35).
 - **Read** gives the intervals in effect.
 - **Write** both at once. To change only one, read first, change one field, write

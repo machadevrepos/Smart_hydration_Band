@@ -3,7 +3,7 @@
 
 /*
  * Default water reminder intervals in minutes: Daily 90, Night 35. The app can
- * change them (1-240 min); the values it sets are kept in flash and replace
+ * change them (15-240 min); the values it sets are kept in flash and replace
  * these until it sets 0, which restores the default.
  */
 #define APP_DAILY_REMINDER_MIN 90

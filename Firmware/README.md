@@ -150,7 +150,7 @@ The band works with no app or pairing:
 | Night | Green | Double tap every 35 min (default) |
 
 The app can set the mode and both intervals over BLE (see BLE). The intervals it
-sets, 1-240 minutes (the app offers 20, 30, 45 and 60), are saved in flash and
+sets, 15-240 minutes (the app offers 20, 30, 45 and 60), are saved in flash and
 kept through power-off; writing 0 restores a default. The mode is not kept
 through power-off: the band always powers up in Daily Mode, as specified.
 
@@ -230,7 +230,7 @@ the phone may choose differently.
 | Umbra `1ab10000-fde9-42a3-ab5b-82416f9bca6e` | Steps | `1ab10001-...` | Read, notify | 32-bit little endian, on change |
 | | Mode | `1ab10002-...` | Read, write, notify | 1 byte: 0 Daily, 1 Night, on change. Write to switch |
 | | Haptic | `1ab10003-...` | Write | 1 byte: 1 fires the double tap |
-| | Intervals | `1ab10004-...` | Read, write | Daily then Night minutes, uint16 LE each, 1-240, 0 = default. Kept in flash |
+| | Intervals | `1ab10004-...` | Read, write | Daily then Night minutes, uint16 LE each, 15-240, 0 = default. Kept in flash |
 | | Time | `1ab10005-...` | Read, write | UTC seconds uint32 LE, then local offset from UTC in minutes int16 LE. Write on every connection. Reads 0 UTC if not set |
 | | Quiet hours | `1ab10006-...` | Read, write | Start then end, local minutes after midnight, uint16 LE each, 0-1439. Equal = off. Default 1380, 420. Kept in flash |
 | | Log control | `1ab10007-...` | Read, write | Read: oldest seq, next seq (uint32 LE each), capacity uint16, record length uint8, format version uint8. Write: uint32 seq to send from, 0 = oldest |

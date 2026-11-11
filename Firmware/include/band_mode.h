@@ -36,8 +36,13 @@ struct band_quiet_hours {
 
 #define BAND_MINUTES_PER_DAY 1440
 
-/* Accepted interval range in minutes. The app offers 20, 30, 45 and 60. */
-#define BAND_INTERVAL_MIN 1
+/*
+ * Accepted interval range in minutes. The app offers 20, 30, 45 and 60. With no
+ * pairing, anyone nearby can write the intervals, and they are kept in flash, so
+ * the floor stops a stray or hostile write from leaving the band buzzing every
+ * minute through power cycles. A stored value below it reads as the default.
+ */
+#define BAND_INTERVAL_MIN 15
 #define BAND_INTERVAL_MAX 240
 
 /* What band_mode_process() did, for the caller to report. */
