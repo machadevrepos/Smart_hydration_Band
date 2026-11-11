@@ -220,8 +220,11 @@ means something hung and needs investigating.
 ## BLE
 
 The band advertises as `Umbra`, with no pairing, and runs the same with no app
-connected. It asks the phone for a 200-400 ms connection interval to save power;
-the phone may choose differently.
+connected. It advertises every 100-150 ms for 30 s after start-up and after each
+disconnect, so a waiting app reconnects at once, then every 1022.5 ms until a
+phone connects, which uses about a tenth of the radio current. It asks the phone
+for a 200-400 ms connection interval to save power; the phone may choose
+differently.
 
 | Service | Characteristic | UUID | Access | Value |
 | --- | --- | --- | --- | --- |

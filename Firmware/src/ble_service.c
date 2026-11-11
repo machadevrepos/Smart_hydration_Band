@@ -33,6 +33,17 @@ LOG_MODULE_REGISTER(ble_service, LOG_LEVEL_INF);
  */
 #define ADV_RETRY_MS 5000
 
+/*
+ * Advertise every 100-150 ms for this long after start-up and after each
+ * disconnect, so an app that is looking finds the band at once, then every
+ * 1022.5 ms (one of the intervals Apple recommends for accessories) until a
+ * phone connects. The band spends most of its time unconnected, and the slow
+ * rate uses about a tenth of the radio current; an app scanning in the
+ * foreground still finds it within a second or two.
+ */
+#define ADV_FAST_MS     30000
+#define ADV_SLOW_INT    0x0664 /* 0.625 ms units: 1022.5 ms */
+
 /* Haptic commands closer together than this are ignored. */
 #define HAPTIC_COMMAND_GAP_MS 2000
 
@@ -564,9 +575,12 @@ static void send_log(uint32_t from)
 static bool advertising_failed;
 
 /* Only the BLE thread calls this. Logs once per failure run. */
-static int start_advertising(void)
+static int start_advertising(bool fast)
 {
-	int err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_2, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
+	int err = bt_le_adv_start(fast ? BT_LE_ADV_CONN_FAST_2
+				       : BT_LE_ADV_PARAM(BT_LE_ADV_OPT_CONN, ADV_SLOW_INT,
+							 ADV_SLOW_INT, NULL),
+				  ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
 
 	if (err == -EALREADY) {
 		err = 0;
@@ -582,7 +596,8 @@ static int start_advertising(void)
 	}
 
 	advertising_failed = false;
-	printk("  BLE advertising as %s\n", CONFIG_BT_DEVICE_NAME);
+	printk("  BLE advertising as %s%s\n", CONFIG_BT_DEVICE_NAME,
+	       fast ? "" : ", slowly until a phone connects");
 	return 0;
 }
 
@@ -771,20 +786,45 @@ static void ble_thread(void *p1, void *p2, void *p3)
 	ARG_UNUSED(p3);
 
 	int64_t adv_attempt_ms = 0;
+	/* End of the fast advertising phase, 0 outside it. */
+	int64_t adv_fast_until_ms = 0;
 
 	for (;;) {
-		/* Wake on its own to retry while advertising is down. */
-		(void)k_sem_take(&ble_wake, advertising_failed ? K_MSEC(ADV_RETRY_MS) : K_FOREVER);
+		/* Wake on its own to retry while advertising is down, or to slow it. */
+		k_timeout_t wait = K_FOREVER;
+
+		if (advertising_failed) {
+			wait = K_MSEC(ADV_RETRY_MS);
+		} else if (adv_fast_until_ms != 0) {
+			wait = K_MSEC(MAX(adv_fast_until_ms - k_uptime_get(), 0));
+		}
+		(void)k_sem_take(&ble_wake, wait);
 
 		bool restart = atomic_set(&restart_advertising, 0) != 0;
+		int64_t now = k_uptime_get();
+
+		if (adv_fast_until_ms != 0 && now >= adv_fast_until_ms) {
+			adv_fast_until_ms = 0;
+			/* Still advertising fast with no phone: change to the slow rate. */
+			if (!restart && !advertising_failed && !is_connected()) {
+				(void)bt_le_adv_stop();
+				adv_attempt_ms = now;
+				(void)start_advertising(false);
+			}
+		}
 
 		if (advertising_failed && is_connected()) {
 			/* Only one connection: advertising resumes after it ends. */
 			advertising_failed = false;
-		} else if (restart ||
-			   (advertising_failed && k_uptime_get() - adv_attempt_ms >= ADV_RETRY_MS)) {
-			adv_attempt_ms = k_uptime_get();
-			(void)start_advertising();
+			adv_fast_until_ms = 0;
+		} else if (restart) {
+			adv_attempt_ms = now;
+			adv_fast_until_ms = now + ADV_FAST_MS;
+			(void)start_advertising(true);
+		} else if (advertising_failed && now - adv_attempt_ms >= ADV_RETRY_MS) {
+			adv_attempt_ms = now;
+			/* Fast only while the phase it failed in lasts. */
+			(void)start_advertising(adv_fast_until_ms != 0);
 		}
 		if (atomic_set(&log_request_pending, 0) != 0) {
 			send_log((uint32_t)atomic_get(&log_request_from));

@@ -21,6 +21,7 @@ nothing the app does (or fails to do) stops the water reminders.
 | Scan response | Umbra service UUID `1ab10000-fde9-42a3-ab5b-82416f9bca6e` |
 | Pairing | None. Connect directly. |
 | Connections | One. While a phone is connected the band does not advertise. |
+| Advertising interval | 100-150 ms for 30 s after power-on and after each disconnect, then 1022.5 ms until a phone connects. |
 
 Every band currently advertises the same name. Remember the band's device ID
 after the first connection to reconnect to the same one.
