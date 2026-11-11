@@ -95,6 +95,20 @@ In VS Code with the nRF Connect extension, use **Add build configuration**,
 select board `nrf52dk/nrf52832`, then Build and Flash. The overlay in `boards/`
 is applied automatically.
 
+### Preparing a unit for delivery
+
+1. In `include/app_config.h`, `APP_SPO2_BENCH_MODE` is `0`. The start-up output
+   must show `SpO2: first check at 02:00 once worn` and no `SpO2 BENCH MODE`
+   line.
+2. `CONFIG_BT_DIS_FW_REV_STR` in `prj.conf` is raised from the last build that
+   left the bench, and the start-up line shows that version.
+3. Flash with a full erase, so no bench data, boot count or test settings go to
+   the client: `west flash --erase`. The start-up log then shows `boot 1` and an
+   empty data log.
+4. The MAX30101 VDD check in "Hardware caveats" is done on that unit.
+5. Battery millivolts on RTT agree with a multimeter (see "Low battery").
+6. Switch it off with the power switch (SW1) for shipping.
+
 Open the Segger RTT viewer (or the nRF Connect extension's RTT terminal) to see
 the output. Logs are on RTT channel 0.
 
@@ -104,7 +118,7 @@ Skin contact is detected from the raw IR level (`APP_CONTACT_IR_MIN` in
 line per second while the sensor is on the skin:
 
 ```text
-Smart Hydration Band, firmware 1.1.0
+Smart Hydration Band, firmware 1.2.0
 
   time    heart rate    steps   status
   -----   ----------   ------   ----------------------------
@@ -263,8 +277,8 @@ since an NVS sector erase can take longer than the sensor FIFO lasts. During a
 transfer the band asks for a 15-30 ms connection interval, then 200-400 ms again.
 
 Changing the flash layout moves the settings partition, so the first flash of a
-version that changes it (1.0.0, then 1.1.0 for the larger SpO2 records) should
-erase the chip (`west flash --erase`); stored intervals, quiet hours and the log
+version that changes it (1.0.0, then 1.1.0 for the larger SpO2 records; 1.2.0
+keeps the 1.1.0 layout) should erase the chip (`west flash --erase`); stored intervals, quiet hours and the log
 then start from scratch.
 
 The battery percentage uses a typical LiPo curve and has not been calibrated.

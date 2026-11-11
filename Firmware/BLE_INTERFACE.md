@@ -1,9 +1,12 @@
 # Umbra band: BLE interface for the app
 
-This is the contract between the band's firmware (version 1.1.0 and later) and
+This is the contract between the band's firmware (version 1.2.0 and later) and
 the phone app. It lists every Bluetooth service and characteristic the band
 exposes, the exact byte layout of each value, what the band does when the app
 writes one, and the order the app should do things in on each connection.
+
+Changes since 1.1.0: reminder intervals must be 15-240 minutes (was 1-240), and
+a log request past the band's last record sends the whole log (section 2.10).
 
 All multi-byte numbers are **little endian**. "Minutes after midnight" is
 local time. There is no pairing or bonding: any phone can connect, and the
