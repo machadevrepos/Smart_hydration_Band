@@ -4,8 +4,9 @@
 #include <stdint.h>
 
 /*
- * Start the BMI270 and its built-in step counter. Takes about 1 s at 100 kHz
- * I2C, mostly loading the chip's firmware. The count starts at 0.
+ * Start the BMI270 and its built-in step counter. Takes about 0.5 s at
+ * 400 kHz I2C, mostly loading the chip's firmware (the waits between chunks
+ * are fixed). The count starts at 0.
  *
  * Returns 0 on success, negative errno on failure.
  */

@@ -25,7 +25,12 @@
 &i2c0 {
 	compatible = "nordic,nrf-twim";
 	status = "okay";
-	clock-frequency = <100000>;
+	/*
+	 * Fast mode: both sensors support 400 kHz and the PCB has 4.7k pull-ups.
+	 * A quarter of the bus time per transfer, so the TWIM and the high-
+	 * frequency clock run for less of each FIFO drain.
+	 */
+	clock-frequency = <400000>;
 
 	/*
 	 * src/max30101.c checks the mode, slots, rate, averaging and pulse width
