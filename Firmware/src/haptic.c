@@ -3,6 +3,7 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/kernel.h>
+#include <zephyr/sys/atomic.h>
 
 #include "app_config.h"
 #include "haptic.h"
@@ -20,6 +21,38 @@ static size_t pattern_step;
 static bool motor_ready;
 static K_MUTEX_DEFINE(start_lock);
 
+/*
+ * Whether the motor is on, and k_uptime_get_32() when it last turned off (wrap
+ * is handled by unsigned subtraction), for haptic_idle_for().
+ */
+static atomic_t motor_on;
+static atomic_t motor_ran;
+static atomic_t motor_off_ms;
+
+static void motor_set(bool on)
+{
+	(void)gpio_pin_set_dt(&motor, on ? 1 : 0);
+
+	if (on) {
+		atomic_set(&motor_ran, 1);
+		atomic_set(&motor_on, 1);
+	} else {
+		atomic_set(&motor_off_ms, (atomic_val_t)k_uptime_get_32());
+		atomic_set(&motor_on, 0);
+	}
+}
+
+bool haptic_idle_for(uint32_t ms)
+{
+	if (atomic_get(&motor_on) != 0) {
+		return false;
+	}
+	if (atomic_get(&motor_ran) == 0) {
+		return true;
+	}
+	return k_uptime_get_32() - (uint32_t)atomic_get(&motor_off_ms) >= ms;
+}
+
 static void pattern_work_handler(struct k_work *work);
 static K_WORK_DELAYABLE_DEFINE(pattern_work, pattern_work_handler);
 
@@ -28,11 +61,11 @@ static void pattern_work_handler(struct k_work *work)
 	ARG_UNUSED(work);
 
 	if (pattern_step >= pattern_len) {
-		(void)gpio_pin_set_dt(&motor, 0);
+		motor_set(false);
 		return;
 	}
 
-	(void)gpio_pin_set_dt(&motor, (pattern_step % 2U) == 0U);
+	motor_set((pattern_step % 2U) == 0U);
 	(void)k_work_schedule(&pattern_work, K_MSEC(pattern[pattern_step]));
 	pattern_step++;
 }
@@ -86,7 +119,7 @@ void haptic_stop(void)
 
 	k_mutex_lock(&start_lock, K_FOREVER);
 	(void)k_work_cancel_delayable_sync(&pattern_work, &sync);
-	(void)gpio_pin_set_dt(&motor, 0);
+	motor_set(false);
 	k_mutex_unlock(&start_lock);
 }
 

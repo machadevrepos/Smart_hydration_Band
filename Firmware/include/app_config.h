@@ -43,7 +43,7 @@
 
 /*
  * Low battery: below APP_BATTERY_OFF_MV for APP_BATTERY_OFF_READINGS readings in
- * a row (10 s apart, so a motor dip never counts) the band switches itself off
+ * a row (10 s apart, never with the motor running) the band switches itself off
  * to protect the LiPo and avoid brown-out resets. 3.3 V is under 5% left.
  * Readings below APP_BATTERY_VALID_MV are taken as a measurement fault, not a
  * flat battery, so a broken divider cannot keep switching the band off.
@@ -52,6 +52,13 @@
 #define APP_BATTERY_OFF_MV       3300
 #define APP_BATTERY_OFF_READINGS 6
 #define APP_BATTERY_VALID_MV     2500
+
+/*
+ * The battery is measured only once the motor has been off this long: under the
+ * motor's current the voltage dips by several percent, and it takes a moment to
+ * recover. The shown percentage is then smoothed in src/battery.c.
+ */
+#define APP_BATTERY_MOTOR_SETTLE_MS 2000
 
 /*
  * SpO2 spot checks (src/spo2.c), in seconds: the first about 2 min after

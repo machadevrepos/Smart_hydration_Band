@@ -40,6 +40,13 @@ BUILD_ASSERT(HR_SAMPLE_RATE_HZ == MAX30101_SAMPLE_RATE_HZ,
 /* Heart-rate status is printed once a second. */
 #define STATUS_PERIOD_MS 1000
 #define BATTERY_PERIOD_MS 10000
+/*
+ * A battery reading put off because the motor ran is tried again this soon,
+ * but taken anyway once put off this long, so a band buzzed nonstop still gets
+ * its low-battery check.
+ */
+#define BATTERY_RETRY_MS     500
+#define BATTERY_DEFER_MAX_MS 60000
 /* While off the skin, repeat the status only this often. */
 #define NO_CONTACT_REPEAT_MS 10000
 
@@ -107,7 +114,10 @@ struct hr_status {
 	bool have_battery;
 	/* Consecutive readings below APP_BATTERY_OFF_MV. */
 	int low_battery_readings;
+	/* The gauge's percentage, the one shown in the app. */
 	uint8_t battery_percent;
+	/* When the due reading was first put off for the motor, 0 if it is not. */
+	int64_t battery_deferred_ms;
 };
 
 /*
@@ -232,29 +242,66 @@ static void check_low_battery(struct hr_status *st, int32_t millivolts)
 	}
 }
 
-static void update_battery(struct hr_status *st)
+/*
+ * Measure the battery and update the shown percentage. The motor's current pulls
+ * the voltage down by several percent while it runs, so a reading waits until
+ * it has been off for APP_BATTERY_MOTOR_SETTLE_MS.
+ *
+ * Returns false if the reading was put off for the motor: try again soon.
+ */
+static bool update_battery(struct hr_status *st)
 {
-	unsigned int secs = (unsigned int)(k_uptime_get() / 1000);
-	uint8_t percent;
+	int64_t now = k_uptime_get();
+	unsigned int secs = (unsigned int)(now / 1000);
+	uint8_t curve_percent;
+	uint8_t shown;
 	int32_t millivolts;
 	int ret;
 
 	if (!st->battery_ok) {
-		return;
+		return true;
 	}
 
-	ret = battery_read(&percent, &millivolts);
+	bool motor_busy = !haptic_idle_for(APP_BATTERY_MOTOR_SETTLE_MS);
+
+	if (motor_busy) {
+		if (st->battery_deferred_ms == 0) {
+			st->battery_deferred_ms = now;
+		}
+		if (now - st->battery_deferred_ms < BATTERY_DEFER_MAX_MS) {
+			return false;
+		}
+	}
+	st->battery_deferred_ms = 0;
+
+	ret = battery_read(&curve_percent, &millivolts);
 	if (ret < 0) {
 		printk("  %02u:%02u   battery read FAILED (%d)\n", secs / 60, secs % 60, ret);
-		return;
+		return true;
 	}
 
-	printk("  %02u:%02u   battery %u%% (%d mV)\n", secs / 60, secs % 60, percent, millivolts);
+	if (motor_busy) {
+		/*
+		 * Taken anyway with the motor in use: good enough to catch a flat
+		 * battery, but too low for the gauge, which would never come back up.
+		 */
+		printk("  %02u:%02u   battery %d mV with the motor in use, not shown\n", secs / 60,
+		       secs % 60, millivolts);
+		check_low_battery(st, millivolts);
+		return true;
+	}
+
+	shown = battery_gauge_update(millivolts);
+	/* Shown, then this reading (and its own percentage), then the filtered voltage. */
+	printk("  %02u:%02u   battery %u%% (%d mV = %u%%, filtered %d mV%s)\n", secs / 60,
+	       secs % 60, shown, millivolts, curve_percent, battery_gauge_filtered_mv(),
+	       battery_gauge_charging() ? ", charging" : "");
 
 	st->have_battery = true;
-	st->battery_percent = percent;
+	st->battery_percent = shown;
 
 	check_low_battery(st, millivolts);
+	return true;
 }
 
 /*
@@ -620,6 +667,8 @@ int main(void)
 	if (ret < 0) {
 		LOG_ERR("Battery measurement unavailable (%d)", ret);
 	}
+	/* After a watchdog reset, carry on from the percentage the app was shown. */
+	(void)battery_gauge_init(watchdog_reset_kept_ram());
 
 	ret = ble_service_init();
 	if (ret < 0) {
@@ -680,8 +729,10 @@ int main(void)
 		}
 
 		if (k_uptime_get() >= next_battery_ms) {
-			next_battery_ms = k_uptime_get() + BATTERY_PERIOD_MS;
-			update_battery(&status);
+			bool taken = update_battery(&status);
+
+			next_battery_ms =
+				k_uptime_get() + (taken ? BATTERY_PERIOD_MS : BATTERY_RETRY_MS);
 		}
 
 		/* Fixed 1 s cadence, independent of FIFO bursts and the sensor clock. */

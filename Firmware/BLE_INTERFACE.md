@@ -70,8 +70,11 @@ value.
 
 ### 2.2 Battery Level (`0x2A19`)
 
-0-100 %. Notified when it changes, measured every 10 s. It is an estimate from the
-battery voltage. Below about 5% (3.3 V for a minute) the band switches itself off;
+0-100 %. Notified when it changes. It is an estimate from the battery voltage,
+smoothed on the band like a phone's: it moves 1% at a time, falls at most 1% a
+minute, and rises only while charging (at most 1% every 100 s), so the app can
+show it as it comes, without its own smoothing. Readings with the motor running
+are left out. Below about 5% (3.3 V for a minute) the band switches itself off;
 the LED going dark is the sign.
 
 ### 2.3 Firmware Revision String (`0x2A26`)

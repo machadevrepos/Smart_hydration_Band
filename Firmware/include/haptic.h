@@ -1,6 +1,9 @@
 #ifndef HAPTIC_H
 #define HAPTIC_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
 /*
  * Configure the motor output, off.
  *
@@ -22,5 +25,12 @@ void haptic_double_tap(void);
 
 /* Stop any pattern and leave the motor off. Waits for a running step to end. */
 void haptic_stop(void);
+
+/*
+ * True if the motor is off and has been off for at least ms (or has never run).
+ * The motor's current pulls the battery voltage down while it runs, so the
+ * battery is measured only when this holds. Safe from any thread.
+ */
+bool haptic_idle_for(uint32_t ms);
 
 #endif /* HAPTIC_H */
