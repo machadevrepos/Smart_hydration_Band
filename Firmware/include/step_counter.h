@@ -16,9 +16,10 @@
 int step_counter_init(bool try_restore);
 
 /*
- * Read the steps counted since step_counter_init(). The count only grows: if
- * the chip restarts its own count, counting carries on from the total. A read
- * showing more steps than a wrist could take since the last one is refused.
+ * Read the steps counted since power-up (kept through a watchdog reset). The
+ * count only grows: if the chip restarts its own count, counting carries on from
+ * the total. A read showing more steps than a wrist could take since the last
+ * one is refused.
  *
  * Returns 0 on success, negative errno on failure.
  */
