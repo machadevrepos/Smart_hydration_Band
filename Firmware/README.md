@@ -151,7 +151,8 @@ send, and has no step-counter API. The firmware blob comes from the Zephyr tree
 (`drivers/sensor/bosch/bmi270/bmi270_config_file.h`). If the BMI270 fails to
 start, an error is logged, steps show `--` and heart rate keeps running.
 
-The count starts at 0 at power-up and only grows until the next power-up. Every
+The count starts at 0 at power-up and only grows until the next power-up; a
+watchdog reset keeps it (no-init RAM, like the mode). Every
 10 s the main loop checks that the BMI270 still has its setup: a supply dip
 resets it, which turns its accelerometer off and clears its firmware and count.
 If that happened it is started again (about 0.5 s, which also restarts heart
@@ -230,8 +231,11 @@ the same mode on the same reminder schedule: `band_mode.c` keeps the mode and
 the time to the next reminder in no-init RAM, each with its inverse as a check,
 and the start-up line says `(resumed after reset)`. Without this a Night session
 would silently drop to Daily after a reset, and a band that kept resetting would
-never reach a reminder. Power-on, brown-out and the power switch start fresh in
-Daily Mode.
+never reach a reminder. The same reset also keeps the time of day, the step
+count and the battery percentage shown in the app, so its numbers carry on
+instead of jumping; heart rate locks again within about 11 s and SpO2 is measured
+again on schedule. Power-on, brown-out and the power switch start fresh in Daily
+Mode.
 
 After every start the RTT output shows why the chip reset, for example
 `last reset: power-on` or `last reset: watchdog`. Any `watchdog` in a soak test

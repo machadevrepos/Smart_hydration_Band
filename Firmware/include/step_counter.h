@@ -1,16 +1,19 @@
 #ifndef STEP_COUNTER_H
 #define STEP_COUNTER_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /*
  * Start the BMI270 and its built-in step counter. Takes about 0.5 s at
  * 400 kHz I2C, mostly loading the chip's firmware (the waits between chunks
- * are fixed). The count starts at 0.
+ * are fixed). The count starts at 0, or with try_restore (only after a reset
+ * that kept RAM) carries on from the total before the reset if a valid copy
+ * was kept.
  *
  * Returns 0 on success, negative errno on failure.
  */
-int step_counter_init(void);
+int step_counter_init(bool try_restore);
 
 /*
  * Read the steps counted since step_counter_init(). The count only grows: if

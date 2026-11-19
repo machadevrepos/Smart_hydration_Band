@@ -663,8 +663,11 @@ int main(void)
 		LOG_ERR("Button unavailable (%d)", ret);
 	}
 
-	/* Heart rate still runs if the BMI270 fails; steps then show "--". */
-	ret = step_counter_init();
+	/*
+	 * Heart rate still runs if the BMI270 fails; steps then show "--". After a
+	 * watchdog reset the count carries on from before it.
+	 */
+	ret = step_counter_init(watchdog_reset_kept_ram());
 	status.steps_ok = ret == 0;
 	if (ret < 0) {
 		LOG_ERR("Step counter unavailable (%d)", ret);

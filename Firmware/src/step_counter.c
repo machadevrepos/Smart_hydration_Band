@@ -5,6 +5,7 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/kernel.h>
+#include <zephyr/linker/section_tags.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/byteorder.h>
 
@@ -74,6 +75,29 @@ static const struct i2c_dt_spec bmi270 = I2C_DT_SPEC_GET(DT_NODELABEL(bmi270));
 static uint32_t count_offset;
 static uint32_t last_count;
 static int64_t last_read_ms;
+
+/*
+ * The total, kept in RAM that start-up does not clear, with its inverse as a
+ * check: start-up resets the chip and its count, so without this a watchdog
+ * reset would send the app's step count back to 0.
+ */
+struct kept_steps {
+	uint32_t magic;
+	uint32_t total;
+	uint32_t check;
+};
+
+#define KEPT_MAGIC 0x57e90001U
+
+static __noinit struct kept_steps kept;
+
+static void keep_total(uint32_t total)
+{
+	kept.magic = 0U;
+	kept.total = total;
+	kept.check = ~total;
+	kept.magic = KEPT_MAGIC;
+}
 
 /* A wrist cannot take more steps than this per second; more is a bad read. */
 #define MAX_STEPS_PER_S  5
@@ -252,9 +276,13 @@ static int start_chip(void)
 	return write_reg(REG_PWR_CONF, pwr_conf | PWR_CONF_ADV_SAVE);
 }
 
-int step_counter_init(void)
+int step_counter_init(bool try_restore)
 {
 	count_offset = 0;
+	if (try_restore && kept.magic == KEPT_MAGIC && kept.check == ~kept.total) {
+		count_offset = kept.total;
+	}
+	keep_total(count_offset);
 	last_count = 0;
 	last_read_ms = k_uptime_get();
 
@@ -351,5 +379,6 @@ int step_counter_read(uint32_t *steps)
 	last_count = count;
 	last_read_ms = now;
 	*steps = count_offset + count;
+	keep_total(*steps);
 	return 0;
 }
