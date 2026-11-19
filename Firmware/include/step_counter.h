@@ -13,11 +13,24 @@
 int step_counter_init(void);
 
 /*
- * Read the steps counted since step_counter_init().
+ * Read the steps counted since step_counter_init(). The count only grows: if
+ * the chip restarts its own count, counting carries on from the total. A read
+ * showing more steps than a wrist could take since the last one is refused.
  *
  * Returns 0 on success, negative errno on failure.
  */
 int step_counter_read(uint32_t *steps);
+
+/*
+ * Check that the BMI270 still has its setup, and start it again if it lost it
+ * (a supply dip resets it: firmware, step counter and accelerometer off). The
+ * restart takes about 0.5 s; counting carries on from the total. Call every few
+ * seconds from the main loop.
+ *
+ * Returns 0 if the chip is fine, 1 if it was restarted, negative errno if it
+ * could not be checked or restarted.
+ */
+int step_counter_check(void);
 
 /*
  * The accelerometer's reset range is +-8 g, so one g is this many counts. The

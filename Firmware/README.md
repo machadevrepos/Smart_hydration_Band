@@ -151,9 +151,15 @@ send, and has no step-counter API. The firmware blob comes from the Zephyr tree
 (`drivers/sensor/bosch/bmi270/bmi270_config_file.h`). If the BMI270 fails to
 start, an error is logged, steps show `--` and heart rate keeps running.
 
-The count starts at 0 at power-up. Daily reset, wrist-specific tuning and use of
-the interrupt lines are not implemented, and accuracy on the wrist is not yet
-measured.
+The count starts at 0 at power-up and only grows until the next power-up. Every
+10 s the main loop checks that the BMI270 still has its setup: a supply dip
+resets it, which turns its accelerometer off and clears its firmware and count.
+If that happened it is started again (about 0.5 s, which also restarts heart
+rate, as after any FIFO overflow) and the count carries on from the total, so
+the app never sees steps go backwards. A failed restart is retried after 5 min.
+A read showing more steps than a wrist could take since the last one is ignored.
+Daily reset, wrist-specific tuning and use of the interrupt lines are not
+implemented, and accuracy on the wrist is not yet measured.
 
 ## Modes, LED, button and haptics
 

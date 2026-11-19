@@ -66,6 +66,28 @@ LOG_MODULE_REGISTER(step_counter, LOG_LEVEL_INF);
 
 static const struct i2c_dt_spec bmi270 = I2C_DT_SPEC_GET(DT_NODELABEL(bmi270));
 
+/*
+ * The count reported is the chip's count plus what it had counted before each
+ * restart, so it only grows from power-up even if the chip resets on its own
+ * (a supply dip clears its firmware and its count). Main loop only.
+ */
+static uint32_t count_offset;
+static uint32_t last_count;
+static int64_t last_read_ms;
+
+/* A wrist cannot take more steps than this per second; more is a bad read. */
+#define MAX_STEPS_PER_S  5
+#define MAX_STEPS_MARGIN 50
+
+/*
+ * After a restart that failed, wait this long before the next: each attempt
+ * holds the main loop for about 0.5 s, which overflows the MAX30101 FIFO and
+ * restarts heart rate.
+ */
+#define RESTART_BACKOFF_MS (5 * 60 * 1000)
+#define STATUS_NOT_INIT    0x00
+static int64_t restart_allowed_ms;
+
 static int write_reg(uint8_t reg, uint8_t value)
 {
 	int ret = i2c_reg_write_byte_dt(&bmi270, reg, value);
@@ -170,7 +192,8 @@ static int enable_step_counter(void)
 	return write_reg(REG_FEAT_PAGE, PAGE_STEP_OUT);
 }
 
-int step_counter_init(void)
+/* Reset the chip, load its firmware and start the step counter from 0. */
+static int start_chip(void)
 {
 	uint8_t value;
 	uint8_t pwr_conf;
@@ -229,6 +252,60 @@ int step_counter_init(void)
 	return write_reg(REG_PWR_CONF, pwr_conf | PWR_CONF_ADV_SAVE);
 }
 
+int step_counter_init(void)
+{
+	count_offset = 0;
+	last_count = 0;
+	last_read_ms = k_uptime_get();
+
+	return start_chip();
+}
+
+int step_counter_check(void)
+{
+	uint8_t status;
+	uint8_t pwr_ctrl;
+	int ret;
+
+	ret = i2c_reg_read_byte_dt(&bmi270, REG_INTERNAL_STATUS, &status);
+	if (ret < 0) {
+		return ret;
+	}
+	ret = i2c_reg_read_byte_dt(&bmi270, REG_PWR_CTRL, &pwr_ctrl);
+	if (ret < 0) {
+		return ret;
+	}
+
+	/*
+	 * A reset turns the accelerometer off (PWR_CTRL reads 0) and leaves the
+	 * firmware "not initialized". Only those two are taken as a reset; other
+	 * status messages are left alone.
+	 */
+	if ((pwr_ctrl & PWR_CTRL_ACC_EN) != 0 &&
+	    (status & STATUS_MESSAGE_MSK) != STATUS_NOT_INIT) {
+		return 0;
+	}
+
+	int64_t now = k_uptime_get();
+
+	if (now < restart_allowed_ms) {
+		return -EAGAIN;
+	}
+
+	LOG_WRN("BMI270 lost its setup (status 0x%02x, power 0x%02x), restarting it", status,
+		pwr_ctrl);
+	count_offset += last_count;
+	last_count = 0;
+	last_read_ms = now;
+
+	ret = start_chip();
+	if (ret < 0) {
+		restart_allowed_ms = k_uptime_get() + RESTART_BACKOFF_MS;
+		return ret;
+	}
+	return 1;
+}
+
 int step_counter_read_accel(int16_t xyz[3])
 {
 	uint8_t rx[6];
@@ -259,6 +336,20 @@ int step_counter_read(uint32_t *steps)
 		return ret;
 	}
 
-	*steps = sys_get_le32(rx);
+	uint32_t count = sys_get_le32(rx);
+	int64_t now = k_uptime_get();
+	int64_t elapsed_s = (now - last_read_ms) / 1000 + 1;
+
+	if (count < last_count) {
+		/* The chip restarted its count: carry on from the total so far. */
+		count_offset += last_count;
+	} else if (count - last_count > MAX_STEPS_PER_S * elapsed_s + MAX_STEPS_MARGIN) {
+		/* More steps than a wrist can take since the last read. */
+		return -EIO;
+	}
+
+	last_count = count;
+	last_read_ms = now;
+	*steps = count_offset + count;
 	return 0;
 }

@@ -49,6 +49,8 @@ BUILD_ASSERT(HR_SAMPLE_RATE_HZ == MAX30101_SAMPLE_RATE_HZ,
 #define BATTERY_DEFER_MAX_MS 60000
 /* While off the skin, repeat the status only this often. */
 #define NO_CONTACT_REPEAT_MS 10000
+/* How often the BMI270 is checked for a reset that lost its setup. */
+#define STEP_CHECK_PERIOD_MS 10000
 
 /* Quality thresholds for the status wording (the estimator rejects below 50). */
 #define QUALITY_GOOD 80
@@ -607,6 +609,7 @@ int main(void)
 	uint32_t button_presses = 0;
 	int64_t next_status_ms = STATUS_PERIOD_MS;
 	int64_t next_battery_ms = 0;
+	int64_t next_step_check_ms = STEP_CHECK_PERIOD_MS;
 	int wdt_ret;
 	bool mode_restored;
 	bool clock_known;
@@ -726,6 +729,18 @@ int main(void)
 
 		if (events != 0) {
 			print_mode_events(events);
+		}
+
+		/* A BMI270 reset (supply dip) would otherwise stop the steps until a power cycle. */
+		if (status.steps_ok && k_uptime_get() >= next_step_check_ms) {
+			next_step_check_ms = k_uptime_get() + STEP_CHECK_PERIOD_MS;
+			ret = step_counter_check();
+			if (ret > 0) {
+				unsigned int secs = (unsigned int)(k_uptime_get() / 1000);
+
+				printk("  %02u:%02u   step counter restarted after a reset, count kept\n",
+				       secs / 60, secs % 60);
+			}
 		}
 
 		if (k_uptime_get() >= next_battery_ms) {
