@@ -85,8 +85,9 @@ screen; it identifies which build a band is running.
 ### 2.4 Steps (`1ab10001`)
 
 uint32: steps counted **since the band was last switched on**. It starts from 0 at
-every power-on, so do not use it as a daily total. Notified when it changes. For
-step history, use the log (section 3).
+every power-on, so do not use it as a daily total. Between power-ons it never goes
+down, even if the step sensor resets itself. Notified when it changes. For step
+history and daily totals, use the log (section 4).
 
 ### 2.5 Mode (`1ab10002`)
 
@@ -272,7 +273,10 @@ Kept for the current app; it can be dropped once the app uses the services above
   - `heart_rate`: always present. **`0` means no reading right now. Show "no
     reading", never "0 bpm", and do not keep showing the old value.**
   - `spo2`: always present. The last SpO2 reading while it is recent (up to 35
-    minutes old), `0` when there is none. Show `0` as "no reading".
+    minutes old) and the band is worn, `0` when there is none or the band is off
+    the wrist (like `heart_rate`). Show `0` as "no reading". SpO2 is a spot check
+    about every 30 minutes, so the same value repeats between checks.
+  - `steps`: steps since the band was switched on. It only grows (see 2.4).
   - `steps` and `battery` are left out if the band cannot measure them.
 - **RX** accepts the text `trigger_haptic`, which works like writing `1` to Haptic.
 

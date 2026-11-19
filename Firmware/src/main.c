@@ -315,10 +315,15 @@ static void publish_telemetry(const struct contact *contact, const struct hr_sta
 	struct spo2_result res;
 	uint8_t spo2 = 0;
 
-	/* A spot check stays current until the next one is due, plus a margin. */
+	/*
+	 * A spot check stays current until the next one is due, plus a margin, and
+	 * only while the band is worn: off the wrist, SpO2 goes to 0 with the heart
+	 * rate, so the app never shows a live SpO2 on a band lying on the table. Put
+	 * back on, a reading that is still current shows again.
+	 */
 	spo2_get_result(&res);
-	if (res.uptime_ms != 0 && k_uptime_get() - res.uptime_ms <=
-					  (int64_t)(APP_SPO2_INTERVAL_S + 5 * 60) * 1000) {
+	if (contact->on && res.uptime_ms != 0 &&
+	    k_uptime_get() - res.uptime_ms <= (int64_t)(APP_SPO2_INTERVAL_S + 5 * 60) * 1000) {
 		spo2 = res.percent;
 	}
 
