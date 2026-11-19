@@ -295,16 +295,19 @@ by 6% or more. The percentage shown in the app then behaves like a phone's
 average), and the shown value moves 1% at a time, down at most once a minute and
 only after the battery has stayed lower for that whole minute. It goes up only
 while charging, which the band recognises from the voltage staying 5% or more
-above the shown value for two minutes (the charger's status pin is not wired to
-the nRF52), and then at most 1% every 100 s, about the rate the ~200 mA charger
-fills a 500 mAh cell. A watchdog reset keeps the shown value. RTT prints
+above the shown value (at 100% when the shown value is within 5% of full) for two
+minutes (the charger's status pin is not wired to the nRF52), and then at most 1%
+every 100 s, about the rate the ~200 mA charger fills a 500 mAh cell. A watchdog reset keeps the shown value. RTT prints
 `battery 86% (3842 mV = 84%, filtered 3851 mV)`: shown, this reading and its own
 percentage, the filtered voltage, and `charging` while charging. If the motor is
 kept busy for a minute (an app buzzing nonstop), a reading is taken anyway for
 the low-battery check below but not shown.
 
-**Low battery.** After six readings in a row (one minute) below 3.3 V, under 5%
-left, the band switches itself off: motor and LED off, MAX30101 and BMI270 shut
+The curve shows 100% from 4.15 V, where a full cell rests off the charger, so a
+charged band stays at 100% for a while, and 0% at 3.3 V, where it switches off.
+
+**Low battery.** After six readings in a row (one minute) below 3.3 V (0%), the
+band switches itself off: motor and LED off, MAX30101 and BMI270 shut
 down, then nRF52 system off. A flat LiPo otherwise ends in brown-out resets and
 erratic behavior. The LED going dark is the sign. Charge it, then press the
 button (or cycle the power switch) to start again; if the battery is still

@@ -5,6 +5,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/linker/section_tags.h>
 
+#include "app_config.h"
 #include "battery.h"
 
 /* The PCB divides the battery by R10 (800k) over R11 (2M) into P0.28. */
@@ -13,14 +14,24 @@
 
 static const struct adc_dt_spec adc = ADC_DT_SPEC_GET(DT_PATH(zephyr_user));
 
-/* Typical LiPo at light load: voltage falling, with percent at each point. */
+/*
+ * Typical LiPo at the band's light load: voltage falling, with percent at each
+ * point. The ends are set the way a phone shows them:
+ * - 100% from 4150 mV: a full cell rests at about 4.15-4.18 V once off the
+ *   charger (the MCP73831 stops at 4.2 V), so it shows 100% for a while after
+ *   charging rather than dropping to 97% within minutes.
+ * - 0% at 3300 mV, APP_BATTERY_OFF_MV, where the band switches itself off, so
+ *   the last percent before it goes dark is near 0, not 3%.
+ */
 static const struct {
 	int16_t millivolts;
 	uint8_t percent;
 } curve[] = {
-	{4200, 100}, {4060, 90}, {3980, 80}, {3920, 70}, {3870, 60}, {3820, 50},
-	{3790, 40},  {3770, 30}, {3740, 20}, {3680, 10}, {3450, 5},  {3000, 0},
+	{4150, 100}, {4060, 90}, {3980, 80}, {3920, 70}, {3870, 60}, {3820, 50},
+	{3790, 40},  {3770, 30}, {3740, 20}, {3680, 10}, {3450, 5},  {3300, 0},
 };
+
+BUILD_ASSERT(APP_BATTERY_OFF_MV == 3300, "0% on the curve must be where the band switches off");
 
 static uint8_t millivolts_to_percent(int32_t mv)
 {
@@ -102,8 +113,9 @@ int battery_read(uint8_t *percent, int32_t *millivolts)
  *   side the whole time. Down needs the target below it for that long.
  * - Up only while charging, 1% at most once per GAUGE_RISE_STEP_READINGS. There
  *   is no charger status line to the nRF52, so charging is a target at least
- *   GAUGE_RISE_MARGIN above the shown value for GAUGE_RISE_READINGS readings in
- *   a row; it ends when the target falls below the shown value (unplugged).
+ *   GAUGE_RISE_MARGIN above the shown value (or 100% when the shown value is
+ *   within that of it) for GAUGE_RISE_READINGS readings in a row; it ends when
+ *   the target falls below the shown value (unplugged).
  *   Otherwise the shown value never goes up, so a reading that recovers after a
  *   busy stretch cannot bounce it.
  *
@@ -215,8 +227,14 @@ uint8_t battery_gauge_update(int32_t millivolts)
 	} else if (target > gauge.shown) {
 		gauge.below = 0;
 		if (!gauge.charging) {
-			gauge.rise_seen =
-				target >= gauge.shown + GAUGE_RISE_MARGIN ? gauge.rise_seen + 1 : 0;
+			/*
+			 * Near full the target cannot get GAUGE_RISE_MARGIN above the
+			 * shown value, so there 100% (4150 mV or more, only reached on
+			 * the charger or just off it) counts as the margin.
+			 */
+			uint8_t needed = MIN(gauge.shown + GAUGE_RISE_MARGIN, 100);
+
+			gauge.rise_seen = target >= needed ? gauge.rise_seen + 1 : 0;
 			if (gauge.rise_seen >= GAUGE_RISE_READINGS) {
 				gauge.charging = true;
 				gauge.above = 0;

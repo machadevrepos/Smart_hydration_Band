@@ -44,7 +44,8 @@
 /*
  * Low battery: below APP_BATTERY_OFF_MV for APP_BATTERY_OFF_READINGS readings in
  * a row (10 s apart, never with the motor running) the band switches itself off
- * to protect the LiPo and avoid brown-out resets. 3.3 V is under 5% left.
+ * to protect the LiPo and avoid brown-out resets. 3.3 V is 0% on the curve in
+ * src/battery.c, so the shown percentage reaches 0 as the band switches off.
  * Readings below APP_BATTERY_VALID_MV are taken as a measurement fault, not a
  * flat battery, so a broken divider cannot keep switching the band off.
  * Check the measured voltage against a multimeter before relying on this.

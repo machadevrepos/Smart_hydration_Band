@@ -74,7 +74,7 @@ value.
 smoothed on the band like a phone's: it moves 1% at a time, falls at most 1% a
 minute, and rises only while charging (at most 1% every 100 s), so the app can
 show it as it comes, without its own smoothing. Readings with the motor running
-are left out. Below about 5% (3.3 V for a minute) the band switches itself off;
+are left out. At 0% (3.3 V for a minute) the band switches itself off;
 the LED going dark is the sign.
 
 ### 2.3 Firmware Revision String (`0x2A26`)
@@ -452,5 +452,5 @@ nothing to the band. To use this interface:
 | Worn | SpO2 spot check every 30 min (30-55 s, keep still); the red LED is lit only then. |
 | App disconnects | Keeps going on its own, keeps logging, advertises again. |
 | Band reset by its watchdog | Comes back within ~10 s in the same mode, same reminder schedule, same time. |
-| Battery under ~5% | Saves the log, switches off (LED dark). Charge, then press the button. |
+| Battery at 0% (3.3 V) | Saves the log, switches off (LED dark). Charge, then press the button. |
 | Band switched off and on | Daily Mode, default schedule. Intervals and quiet hours kept; time lost until the app connects; steps start from 0; log kept. |
