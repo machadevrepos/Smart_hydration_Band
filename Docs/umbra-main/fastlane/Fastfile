@@ -1,0 +1,160 @@
+require "base64"
+require "tmpdir"
+require "shellwords"
+
+# Client project — no reason to phone usage analytics home.
+opt_out_usage
+
+default_platform(:ios)
+
+# ──────────────────────────────────────────────────────────────────────────
+# Signing strategy: direct certificate/profile import, not `match`.
+#
+# `match` is built for teams that want certs/profiles synced through a
+# shared git repo across multiple machines/developers. This is a single
+# client project with a single deploy target (GitHub Actions), so it adds
+# a second repo and a second encryption passphrase to manage for no benefit
+# here. Direct import (this file) needs only two GitHub Secrets holding the
+# .p12 and .mobileprovision the client provides. If Umbra ever needs
+# multiple engineers signing locally, revisit `match` then — see
+# docs/ios-ci-cd.md "Rotating credentials" for the trade-off in more detail.
+# ──────────────────────────────────────────────────────────────────────────
+
+platform :ios do
+  desc "Import the Apple Distribution certificate + provisioning profile from env into a throwaway CI keychain"
+  private_lane :setup_signing do
+    keychain_password = ENV.fetch("IOS_KEYCHAIN_PASSWORD")
+    keychain_name = "umbra-ci.keychain-db"
+
+    create_keychain(
+      name: keychain_name,
+      password: keychain_password,
+      default_keychain: true,
+      unlock: true,
+      timeout: 3600,
+    )
+
+    cert_path = File.join(Dir.mktmpdir, "distribution.p12")
+    File.binwrite(cert_path, Base64.decode64(ENV.fetch("IOS_DIST_CERTIFICATE_P12_BASE64")))
+
+    import_certificate(
+      certificate_path: cert_path,
+      certificate_password: ENV.fetch("IOS_DIST_CERTIFICATE_PASSWORD"),
+      keychain_name: keychain_name,
+      keychain_password: keychain_password,
+    )
+    File.delete(cert_path)
+
+    profile_path = File.join(Dir.mktmpdir, "distribution.mobileprovision")
+    File.binwrite(profile_path, Base64.decode64(ENV.fetch("IOS_DIST_PROVISIONING_PROFILE_BASE64")))
+    install_provisioning_profile(path: profile_path)
+
+    # `signingStyle: automatic` in ExportOptions.plist makes xcodebuild
+    # resolve the profile through a live, authenticated Apple Developer
+    # session at export time — which CI doesn't have, even though the
+    # *archive* step succeeds off the identity alone. Manual signing needs
+    # the profile named explicitly, so pull its UUID straight out of the
+    # profile file rather than hardcoding a name that would silently go
+    # stale the next time the client rotates it.
+    plist_xml = sh("security cms -D -i #{profile_path.shellescape}", log: false)
+    File.delete(profile_path)
+
+    match = plist_xml.match(/<key>UUID<\/key>\s*<string>([^<]+)<\/string>/)
+    UI.user_error!("Could not read UUID from the installed provisioning profile") unless match
+    UI.message("Using provisioning profile UUID #{match[1]}")
+    match[1]
+  end
+
+  desc "Remove the throwaway CI keychain, whether the build succeeded or not"
+  private_lane :teardown_signing do
+    delete_keychain(name: "umbra-ci.keychain-db") if File.exist?(File.expand_path("~/Library/Keychains/umbra-ci.keychain-db"))
+  end
+
+  desc "Build a signed release IPA and upload it to TestFlight via the App Store Connect API"
+  lane :beta do
+    build_number = ENV.fetch("BUILD_NUMBER") { "1" }
+
+    profile_uuid = setup_signing
+
+    api_key = app_store_connect_api_key(
+      key_id: ENV.fetch("ASC_KEY_ID"),
+      issuer_id: ENV.fetch("ASC_ISSUER_ID"),
+      key_content: ENV.fetch("ASC_API_KEY_CONTENT"),
+      is_key_content_base64: false,
+      in_house: false,
+    )
+
+    increment_build_number(
+      xcodeproj: "ios/Runner.xcodeproj",
+      build_number: build_number,
+    )
+
+    build_app(
+      workspace: "ios/Runner.xcworkspace",
+      scheme: "Runner",
+      export_options: {
+        method: "app-store",
+        teamID: "8764YSZYXR",
+        signingStyle: "manual",
+        provisioningProfiles: {
+          "com.umbrawellness.umbra" => profile_uuid,
+        },
+      },
+      output_directory: "build/ios/ipa",
+      output_name: "Umbra.ipa",
+      clean: true,
+    )
+
+    upload_to_testflight(
+      api_key: api_key,
+      ipa: lane_context[SharedValues::IPA_OUTPUT_PATH],
+      skip_waiting_for_build_processing: true,
+    )
+
+  ensure
+    teardown_signing
+  end
+
+  desc "Read-only: list recent builds in App Store Connect and which TestFlight groups they're in"
+  lane :check_status do
+    require "spaceship"
+
+    app_store_connect_api_key(
+      key_id: ENV.fetch("ASC_KEY_ID"),
+      issuer_id: ENV.fetch("ASC_ISSUER_ID"),
+      key_content: ENV.fetch("ASC_API_KEY_CONTENT"),
+      is_key_content_base64: false,
+      in_house: false,
+    )
+
+    app = Spaceship::ConnectAPI::App.all(filter: { bundleId: "com.umbrawellness.umbra" }).first
+    UI.user_error!("No app found for bundle id com.umbrawellness.umbra") unless app
+
+    UI.message("App: #{app.name} (#{app.bundle_id}), Apple ID #{app.id}")
+
+    builds = app.get_builds(sort: "-uploadedDate", limit: 10, includes: Spaceship::ConnectAPI::Build::ESSENTIAL_INCLUDES)
+    UI.important("No builds found at all.") if builds.empty?
+
+    builds.each do |b|
+      compliance = begin
+        b.missing_export_compliance? ? "MISSING export compliance" : "export compliance OK"
+      rescue StandardError
+        "export compliance unknown"
+      end
+      UI.message("Build #{b.version} (app version #{b.app_version}) — #{b.processing_state} — uploaded #{b.uploaded_date} — #{compliance}")
+    end
+
+    UI.message("")
+    UI.message("TestFlight groups:")
+    groups = app.get_beta_groups
+    UI.important("No TestFlight groups exist on this app yet.") if groups.empty?
+
+    groups.each do |g|
+      kind = g.is_internal_group ? "internal" : "external"
+      auto = g.has_access_to_all_builds ? "auto-distributes every processed build" : "builds must be added manually"
+      build_versions = g.fetch_builds.map(&:version)
+      build_versions = build_versions.empty? ? "(no builds assigned)" : build_versions.join(", ")
+      UI.message("  #{g.name} (#{kind}, #{auto}) — testers: #{g.beta_testers&.length || 0} — builds in group: #{build_versions}")
+    end
+  end
+end

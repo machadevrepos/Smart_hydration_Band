@@ -1,0 +1,101 @@
+name: iOS TestFlight Deploy
+
+# Manual only, deliberately. This does not run on push/PR — a bad push
+# should never silently ship a TestFlight build. Promote to an automatic
+# trigger (e.g. tags, or push to a release branch) only as an explicit,
+# separate decision once this has been proven end to end with real
+# signing credentials. See docs/ios-ci-cd.md for current status.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "deploy" to confirm you want to upload a build to TestFlight'
+        required: true
+
+env:
+  FLUTTER_VERSION: "3.44.4"
+  RUBY_VERSION: "3.3"
+  # See docs/ios-ci-cd.md "Build number strategy". Offset keeps CI build
+  # numbers clear of the build(s) already uploaded manually (currently at
+  # build 2); bump this if TestFlight ever reports a collision.
+  BUILD_NUMBER_OFFSET: 100
+
+jobs:
+  deploy:
+    name: Build & upload to TestFlight
+    runs-on: macos-15
+    # Manual approval gate: require a human to type "deploy" in the
+    # workflow_dispatch form, not just click "Run workflow" once. Cheap
+    # insurance against a fat-fingered trigger on a client's TestFlight app.
+    if: github.event.inputs.confirm == 'deploy'
+    steps:
+      - uses: actions/checkout@v4
+
+      # macos-15's default Xcode (16.4, iOS 18.5 SDK) is no longer
+      # accepted by App Store Connect - Apple now requires the iOS 26 SDK
+      # (Xcode 26+) for new uploads. GitHub's runner images bundle several
+      # Xcode versions side by side; this picks whichever is newest rather
+      # than hardcoding a version number that might not exist on the image.
+      - name: Select newest available Xcode
+        run: |
+          echo "Installed Xcode versions:"
+          ls -d /Applications/Xcode*.app 2>/dev/null
+          LATEST_XCODE=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$LATEST_XCODE" ]; then
+            LATEST_XCODE="/Applications/Xcode.app"
+          fi
+          echo "Selecting: $LATEST_XCODE"
+          sudo xcode-select -s "$LATEST_XCODE"
+          xcodebuild -version
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ env.RUBY_VERSION }}
+          bundler-cache: true
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      # Fails fast with a clear, specific message instead of letting
+      # fastlane fail deep inside signing setup with a cryptic error. None
+      # of these secrets exist yet — see docs/ios-ci-cd.md "What's
+      # blocked" — so today this step is expected to fail here, on
+      # purpose, rather than attempt a build with no signing material.
+      - name: Verify required secrets are present
+        run: |
+          missing=()
+          [ -z "${{ secrets.ASC_KEY_ID }}" ] && missing+=("ASC_KEY_ID")
+          [ -z "${{ secrets.ASC_ISSUER_ID }}" ] && missing+=("ASC_ISSUER_ID")
+          [ -z "${{ secrets.ASC_API_KEY_CONTENT }}" ] && missing+=("ASC_API_KEY_CONTENT")
+          [ -z "${{ secrets.IOS_DIST_CERTIFICATE_P12_BASE64 }}" ] && missing+=("IOS_DIST_CERTIFICATE_P12_BASE64")
+          [ -z "${{ secrets.IOS_DIST_CERTIFICATE_PASSWORD }}" ] && missing+=("IOS_DIST_CERTIFICATE_PASSWORD")
+          [ -z "${{ secrets.IOS_DIST_PROVISIONING_PROFILE_BASE64 }}" ] && missing+=("IOS_DIST_PROVISIONING_PROFILE_BASE64")
+          [ -z "${{ secrets.IOS_KEYCHAIN_PASSWORD }}" ] && missing+=("IOS_KEYCHAIN_PASSWORD")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing required GitHub Secrets: ${missing[*]}"
+            echo "This deploy is blocked until the client provides the Apple Distribution certificate/profile. See docs/ios-ci-cd.md."
+            exit 1
+          fi
+
+      - name: Compute build number
+        # GitHub Actions expressions don't support arithmetic (`+` isn't a
+        # valid operator in ${{ }}), so this has to happen in shell instead
+        # of inline in an env: block.
+        run: echo "BUILD_NUMBER=$(( ${{ github.run_number }} + ${{ env.BUILD_NUMBER_OFFSET }} ))" >> "$GITHUB_ENV"
+
+      - name: Build and upload to TestFlight
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_API_KEY_CONTENT: ${{ secrets.ASC_API_KEY_CONTENT }}
+          IOS_DIST_CERTIFICATE_P12_BASE64: ${{ secrets.IOS_DIST_CERTIFICATE_P12_BASE64 }}
+          IOS_DIST_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DIST_CERTIFICATE_PASSWORD }}
+          IOS_DIST_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_DIST_PROVISIONING_PROFILE_BASE64 }}
+          IOS_KEYCHAIN_PASSWORD: ${{ secrets.IOS_KEYCHAIN_PASSWORD }}
+        run: bundle exec fastlane ios beta

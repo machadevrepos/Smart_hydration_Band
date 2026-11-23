@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Umbra is dark-first by deliberate design (see CLAUDE.md), not
+         theme-adaptive, so this must not branch on the OS's day/night
+         setting the way the Flutter template default does. Both this file
+         and values-night resolve to the same dark theme; leaving the
+         Light.NoTitleBar parent here would flash a white native splash on
+         any phone set to system light mode, which is the majority default,
+         before our own black splash screen ever gets to render. -->
+    <style name="LaunchTheme" parent="@android:style/Theme.Black.NoTitleBar">
+        <!-- Show a splash screen on the activity. Automatically removed when
+             the Flutter engine draws its first frame -->
+        <item name="android:windowBackground">@drawable/launch_background</item>
+    </style>
+    <!-- Theme applied to the Android Window as soon as the process has started.
+         This theme determines the color of the Android Window while your
+         Flutter UI initializes, as well as behind your Flutter UI while its
+         running.
+
+         This Theme is only used starting with V2 of Flutter's Android embedding. -->
+    <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
+        <item name="android:windowBackground">?android:colorBackground</item>
+    </style>
+</resources>

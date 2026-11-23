@@ -1,0 +1,8 @@
+app_identifier("com.umbrawellness.umbra")
+team_id("8764YSZYXR")
+
+# No apple_id here deliberately — we don't have the Umbra Apple ID
+# credentials (see docs/ios-ci-cd.md) and don't need them: authentication
+# is entirely via the App Store Connect API key (Fastfile `beta` lane),
+# which fastlane accepts in place of an Apple ID/password everywhere it's
+# used below.

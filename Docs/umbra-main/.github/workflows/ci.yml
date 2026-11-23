@@ -1,0 +1,78 @@
+name: CI
+
+# Validation only — this workflow never touches Apple signing or
+# TestFlight. It exists to catch analyzer/test/build regressions on every
+# PR and every push to main. See .github/workflows/ios-testflight.yml for
+# the (currently manual-only) deployment workflow.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Cancel superseded runs on the same PR/branch rather than burning macOS
+# runner minutes (the scarcest, most expensive GitHub-hosted runner type)
+# on a commit nobody cares about anymore.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned to the version this project is developed against (see `flutter
+  # --version` locally) rather than "stable", so CI can't silently start
+  # failing from an upstream Flutter release landing mid-sprint. Bump
+  # deliberately, in its own commit, when the team upgrades Flutter.
+  FLUTTER_VERSION: "3.44.4"
+
+jobs:
+  analyze-and-test:
+    name: Analyze & test
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      # subosito/flutter-action is the de facto standard Flutter setup
+      # action (used in Flutter's own sample CI docs), not a niche
+      # third-party pick — included here as the one exception to "avoid
+      # random third-party actions."
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: flutter analyze
+        run: flutter analyze
+
+      - name: flutter test
+        run: flutter test
+
+  ios-build-check:
+    name: iOS build check (unsigned)
+    runs-on: macos-15
+    needs: analyze-and-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: Install CocoaPods dependencies
+        working-directory: ios
+        run: pod install --repo-update
+
+      # No Apple Distribution certificate exists on CI yet (see
+      # docs/ios-ci-cd.md), so this validates that the iOS target still
+      # compiles and links — it does not produce a distributable artifact.
+      # --no-codesign is Flutter's supported flag for exactly this case.
+      - name: flutter build ios --no-codesign
+        run: flutter build ios --release --no-codesign

@@ -1,0 +1,27 @@
+name: Check TestFlight Status
+
+# Read-only lookup against App Store Connect — lists recent builds, their
+# processing state, and which TestFlight groups they're assigned to. Does
+# not touch signing, does not build or upload anything, so it runs on a
+# cheap Linux runner rather than macOS.
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: List recent builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+
+      - name: Check build status
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_API_KEY_CONTENT: ${{ secrets.ASC_API_KEY_CONTENT }}
+        run: bundle exec fastlane ios check_status
